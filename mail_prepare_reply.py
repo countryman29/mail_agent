@@ -147,6 +147,61 @@ def build_ru_version():
 """
 
 
+def ensure_reply_subject(subject: str) -> str:
+    clean = clean_subject(subject)
+    if not clean:
+        raise ValueError("Не удалось сформировать Subject для draft-файла")
+    if re.match(r"(?i)^re\s*:", clean):
+        return clean
+    return f"Re: {clean}"
+
+
+def build_draft_content(items, target_folder: str, target_thread_subject: str):
+    if not items:
+        raise RuntimeError(f"Thread not found for subject: {target_thread_subject}")
+
+    items = sorted(items, key=lambda x: x["sort_ts"])
+    latest = items[-1]
+
+    body = build_ru_draft().strip()
+    if not body:
+        raise ValueError("Generated draft body is empty")
+
+    chronology = "\n".join(
+        f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
+        for x in items
+    )
+
+    content = f"""# Черновик ответа по ветке
+
+**Subject:** {ensure_reply_subject(target_thread_subject)}
+**Контрагент:** Elcon  
+**Папка:** {target_folder}  
+**Тема ветки:** {target_thread_subject}  
+**Последнее письмо:** {latest['date_display']}  
+**Сообщений в ветке:** {len(items)}  
+
+## Краткая выжимка по-русски
+{build_ru_summary(items)}
+
+## Что требуется решить
+{build_ru_action_needed(items)}
+
+## Хронология
+{chronology}
+
+## Проект ответа на русском
+{build_ru_version()}
+
+## Body
+{body}
+
+## Внутренняя заметка
+{build_ru_internal_note()}
+"""
+    return latest, content
+
+
 def main():
     print("DEBUG ENV PATH =", ENV_PATH)
     print("DEBUG IMAP_HOST =", repr(IMAP_HOST))
@@ -215,50 +270,13 @@ def main():
 
     mail.logout()
 
-    if not items:
-        print("Thread not found.")
-        return
-
-    items.sort(key=lambda x: x["sort_ts"])
-    latest = items[-1]
+    latest, content = build_draft_content(items, TARGET_FOLDER, TARGET_THREAD_SUBJECT)
 
     out_dir = DRAFTS_DIR / "Elcon" / latest["date_folder"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
     filename = slugify(TARGET_THREAD_SUBJECT) + "_draft.md"
     out_file = out_dir / filename
-
-    chronology = "\n".join(
-        f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
-        for x in items
-    )
-
-    content = f"""# Черновик ответа по ветке
-
-**Контрагент:** Elcon  
-**Папка:** {TARGET_FOLDER}  
-**Тема ветки:** {TARGET_THREAD_SUBJECT}  
-**Последнее письмо:** {latest['date_display']}  
-**Сообщений в ветке:** {len(items)}  
-
-## Краткая выжимка по-русски
-{build_ru_summary(items)}
-
-## Что требуется решить
-{build_ru_action_needed(items)}
-
-## Хронология
-{chronology}
-
-## Проект ответа на русском
-{build_ru_version()}
-
-## Draft reply in English
-{build_ru_draft()}
-
-## Внутренняя заметка
-{build_ru_internal_note()}
-"""
 
     with open(out_file, "w", encoding="utf-8") as f:
         f.write(content)
