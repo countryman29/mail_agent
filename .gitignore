@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+state/
+sent/
+analysis/
+tasks/
+drafts/
+exports/
+*.pyn
+test_vasanton.md
+
+# по желанию исключить служебные результаты
+analysis/
+tasks/
+drafts/
