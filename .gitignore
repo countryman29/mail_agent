@@ -11,6 +11,7 @@ drafts/
 exports/
 *.pyn
 test_vasanton.md
+mail_test_send.pyn
 
 # по желанию исключить служебные результаты
 analysis/
