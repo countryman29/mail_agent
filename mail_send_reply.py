@@ -256,7 +256,10 @@ def read_latest_incoming_message_for_thread(mail, folder: str, thread_subject: s
 
     raw_ids = data[0].split() if data and data[0] else []
     if not raw_ids:
-        raise RuntimeError(f"Во входящих не найдено письмо по теме: {thread_subject}")
+        raise RuntimeError(
+            f"Не найдено письмо для reply lookup: тема '{thread_subject}', папка '{folder}'. "
+            "Проверь MAIL_TARGET_FOLDER и поле '**Тема ветки:**' в draft-файле."
+        )
 
     latest_id = raw_ids[-1]
     status, msg_data = mail.fetch(latest_id, "(RFC822)")

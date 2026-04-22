@@ -89,6 +89,18 @@ def test_read_latest_incoming_message_for_thread_fails_without_message_id():
         send.read_latest_incoming_message_for_thread(mail, "INBOX", "Thread subject")
 
 
+def test_read_latest_incoming_message_for_thread_reports_actionable_not_found_error():
+    mail = FakeThreadMail(b"", make_raw_message("<latest@example.com>"))
+
+    with pytest.raises(RuntimeError, match="MAIL_TARGET_FOLDER") as exc_info:
+        send.read_latest_incoming_message_for_thread(mail, "INBOX/Elcon", "Thread subject")
+
+    message = str(exc_info.value)
+    assert "Thread subject" in message
+    assert "INBOX/Elcon" in message
+    assert "**Тема ветки:**" in message
+
+
 def test_main_thread_reply_fails_when_cleaned_to_is_empty(monkeypatch, tmp_path):
     send_mod = reload_send_module(monkeypatch)
     draft_path = write_thread_reply_draft(tmp_path, "Need update")
