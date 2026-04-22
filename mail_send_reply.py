@@ -1,12 +1,13 @@
-from pathlib import Path
+import os
 import re
 import imaplib
 import smtplib
-from datetime import datetime, timezone
+import time
+from pathlib import Path
 from email import message_from_bytes
 from email.message import EmailMessage
 from email.header import decode_header
-from email.utils import getaddresses, formatdate, make_msgid
+from email.utils import getaddresses, formatdate, make_msgid, parseaddr
 from dotenv import dotenv_values
 
 
@@ -23,15 +24,47 @@ EMAIL_USERNAME = ENV.get("EMAIL_USERNAME")
 EMAIL_PASSWORD = ENV.get("EMAIL_PASSWORD")
 
 # ===== НАСТРОЙКИ =====
-DRAFT_FILE = BASE_DIR / "drafts" / "test_vasanton.md"
-TARGET_FOLDER = "INBOX"
+DEFAULT_DRAFT_FILE = Path("drafts") / "test_vasanton.md"
+
+
+def env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value is None or value == "":
+        value = ENV.get(name, default)
+    return str(value).strip()
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = env_value(name, "true" if default else "false").lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def resolve_runtime_path(value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return path
+
+
+DRAFT_FILE = resolve_runtime_path(env_value("MAIL_DRAFT_FILE", str(DEFAULT_DRAFT_FILE)))
+TARGET_FOLDER = env_value("MAIL_TARGET_FOLDER", "INBOX") or "INBOX"
 
 # True = только проверка, без реальной отправки
 # False = реальная отправка
-DRY_RUN = False
+DRY_RUN = not env_flag("MAIL_SEND_FOR_REAL", default=False)
 
 SENT_LOG_DIR = BASE_DIR / "sent"
-SENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+LEGACY_BODY_HEADERS = ["Draft reply in English", "Message", "BODY"]
+PLACEHOLDER_RECIPIENTS = {"**", "*", "-", "—", "n/a", "na", "none"}
+PREFERRED_SENT_NAMES = [
+    "sent",
+    "sent messages",
+    "sent items",
+    "отправленные",
+    "отправленные сообщения",
+]
+SENT_KEYWORDS = ["sent", "отправ", "отослан"]
+MESSAGE_ID_RE = re.compile(r"<[^<>\s]+>")
 
 
 def decode_mime_words(value: str | None) -> str:
@@ -58,12 +91,12 @@ def quote_imap_folder(folder_name: str) -> str:
     return f'"{escaped}"'
 
 
-def extract_section(text: str, header: str) -> str:
+def extract_section(text: str, header: str) -> str | None:
     pattern = rf"(?ms)^##\s+{re.escape(header)}\s*\n(.*?)(?=^##\s+|\Z)"
     m = re.search(pattern, text)
     if not m:
-        raise ValueError(f"Не найден раздел '## {header}' в draft-файле")
-    return m.group(1).strip()
+        return None
+    return m.group(1)
 
 
 def extract_subject(text: str) -> str:
@@ -102,6 +135,15 @@ def parse_emails_from_line(value: str) -> list[str]:
     return result
 
 
+def is_valid_email_address(value: str) -> bool:
+    _, parsed = parseaddr(value)
+    if not parsed or parsed != value:
+        return False
+    if "@" not in parsed or parsed.startswith("@") or parsed.endswith("@"):
+        return False
+    return " " not in parsed
+
+
 def clean_email_list(emails: list[str]) -> list[str]:
     cleaned = []
     seen = set()
@@ -111,13 +153,13 @@ def clean_email_list(emails: list[str]) -> list[str]:
 
         if not value:
             continue
-        if value in {"**", "*", "-", "—"}:
+        if value.casefold() in PLACEHOLDER_RECIPIENTS:
             continue
-        if "@" not in value:
+        if not is_valid_email_address(value):
             continue
 
         value_lower = value.lower()
-        if value_lower == EMAIL_USERNAME.lower():
+        if EMAIL_USERNAME and value_lower == EMAIL_USERNAME.lower():
             continue
 
         if value_lower not in seen:
@@ -138,12 +180,35 @@ def extract_cc_emails(text: str) -> list[str]:
 
 
 def extract_body(text: str) -> str:
-    for header in ["Body", "BODY", "Message", "Draft reply in English"]:
-        try:
-            return extract_section(text, header)
-        except ValueError:
-            pass
-    raise ValueError("Не найден раздел '## Body' в draft-файле")
+    canonical_body = extract_section(text, "Body")
+    if canonical_body is not None:
+        body = canonical_body.strip()
+        if not body:
+            raise ValueError("Раздел '## Body' найден, но он пустой")
+        return body
+
+    for legacy_header in LEGACY_BODY_HEADERS:
+        legacy_body = extract_section(text, legacy_header)
+        if legacy_body is None:
+            continue
+
+        body = legacy_body.strip()
+        if not body:
+            raise ValueError(
+                f"Найден устаревший раздел '## {legacy_header}', но он пустой. Используй непустой раздел '## Body'."
+            )
+
+        print(
+            f"WARNING: используется устаревший раздел '## {legacy_header}'. "
+            "Переименуйте его в '## Body'."
+        )
+        return body
+
+    accepted_legacy = ", ".join(f"'## {header}'" for header in LEGACY_BODY_HEADERS)
+    raise ValueError(
+        "Не найден текст письма. Обязательный раздел: '## Body'. "
+        f"Временно поддерживаются устаревшие разделы: {accepted_legacy}."
+    )
 
 
 def extract_thread_subject_from_draft(text: str) -> str:
@@ -156,6 +221,27 @@ def extract_thread_subject_from_draft(text: str) -> str:
         if m:
             return sanitize_header(m.group(1))
     raise ValueError("Не найдена строка '**Тема ветки:** ...' в draft-файле")
+
+
+def extract_message_ids(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return MESSAGE_ID_RE.findall(sanitize_header(value))
+
+
+def build_references_header(original_msg) -> tuple[str, str]:
+    original_message_ids = extract_message_ids(original_msg.get("Message-ID"))
+    if not original_message_ids:
+        return "", ""
+
+    in_reply_to = original_message_ids[-1]
+    chain = []
+
+    for message_id in extract_message_ids(original_msg.get("References")) + original_message_ids:
+        if message_id not in chain:
+            chain.append(message_id)
+
+    return in_reply_to, " ".join(chain)
 
 
 def read_latest_incoming_message_for_thread(mail, folder: str, thread_subject: str):
@@ -180,9 +266,10 @@ def read_latest_incoming_message_for_thread(mail, folder: str, thread_subject: s
     raw_bytes = msg_data[0][1]
     original_msg = message_from_bytes(raw_bytes)
 
-    message_id = sanitize_header(original_msg.get("Message-ID"))
-    if not message_id:
+    message_ids = extract_message_ids(original_msg.get("Message-ID"))
+    if not message_ids:
         raise RuntimeError("В исходном письме отсутствует Message-ID")
+    message_id = message_ids[-1]
 
     print("THREAD MESSAGE ID =", latest_id.decode(errors="replace"))
     print("ORIGINAL MESSAGE-ID =", message_id)
@@ -205,113 +292,110 @@ def extract_reply_recipients(original_msg):
     return final_to, final_cc
 
 
-def resolve_all_sent_folders(mail) -> list[str]:
+def decode_imap_list_line(raw_line) -> tuple[set[str], str] | None:
+    if not raw_line:
+        return None
+
+    line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
+    match = re.match(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', line)
+    if not match:
+        fallback = re.search(r'"((?:[^"\\]|\\.)*)"\s*$', line)
+        if not fallback:
+            return None
+        return set(), fallback.group(1).replace(r"\"", '"').replace(r"\\", "\\")
+
+    flags = {flag.lower() for flag in match.group("flags").split()}
+    mailbox_name = match.group("name").strip()
+
+    if mailbox_name.startswith('"') and mailbox_name.endswith('"'):
+        mailbox_name = mailbox_name[1:-1].replace(r"\"", '"').replace(r"\\", "\\")
+
+    return flags, mailbox_name
+
+
+def normalize_mailbox_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name).strip().casefold()
+
+
+def sent_folder_rank(flags: set[str], mailbox_name: str) -> tuple[int, int, str]:
+    normalized_name = normalize_mailbox_name(mailbox_name)
+
+    if "\\sent" in flags:
+        preferred_index = PREFERRED_SENT_NAMES.index(normalized_name) if normalized_name in PREFERRED_SENT_NAMES else len(PREFERRED_SENT_NAMES)
+        return (0, preferred_index, normalized_name)
+
+    if normalized_name in PREFERRED_SENT_NAMES:
+        return (1, PREFERRED_SENT_NAMES.index(normalized_name), normalized_name)
+
+    if any(keyword in normalized_name for keyword in SENT_KEYWORDS):
+        return (2, 0, normalized_name)
+
+    return (9, 0, normalized_name)
+
+
+def resolve_sent_folder(mail) -> str | None:
     status, data = mail.list()
     if status != "OK" or not data:
-        print("DEBUG MAILBOXES = []")
-        return []
+        print("WARNING: IMAP LIST не вернул доступные папки; Sent не найден")
+        return None
 
-    mailbox_names = []
+    candidates = []
+    debug_mailboxes = []
 
     for raw_line in data:
-        if not raw_line:
+        parsed = decode_imap_list_line(raw_line)
+        if not parsed:
             continue
 
-        line = raw_line.decode("utf-8", errors="replace")
-        name = None
+        flags, mailbox_name = parsed
+        debug_mailboxes.append({"name": mailbox_name, "flags": sorted(flags)})
+        rank = sent_folder_rank(flags, mailbox_name)
+        if rank[0] < 9:
+            candidates.append((rank, mailbox_name))
 
-        parts = line.split(' "/" ')
-        if len(parts) >= 2:
-            name = parts[-1].strip().strip('"')
-        else:
-            parts = line.split(' "." ')
-            if len(parts) >= 2:
-                name = parts[-1].strip().strip('"')
-            else:
-                m = re.search(r'"([^"]+)"\s*$', line)
-                if m:
-                    name = m.group(1).strip()
+    print("DEBUG MAILBOXES =", debug_mailboxes)
 
-        if name:
-            mailbox_names.append(name)
+    if not candidates:
+        return None
 
-    print("DEBUG MAILBOXES =", mailbox_names)
-
-    preferred_exact = [
-        "Sent",
-        "INBOX.Sent",
-        "INBOX/Sent",
-        "Отправленные",
-        "INBOX.Отправленные",
-        "INBOX/Отправленные",
-        "&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-",
-    ]
-
-    found = []
-
-    for candidate in preferred_exact:
-        for name in mailbox_names:
-            if name == candidate and name not in found:
-                found.append(name)
-
-    keyword_candidates = [
-        "sent",
-        "отправ",
-        "отослан",
-        "outbox",
-    ]
-
-    for name in mailbox_names:
-        lname = name.lower()
-        if any(keyword in lname for keyword in keyword_candidates):
-            if name not in found:
-                found.append(name)
-
-    for name in mailbox_names:
-        if name.startswith("&") and name not in found:
-            if name == "&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-":
-                found.append(name)
-
-    return found
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
-def append_to_sent(mail, raw_bytes: bytes) -> list[str]:
-    folders = resolve_all_sent_folders(mail)
+def append_to_sent(mail, raw_bytes: bytes) -> str | None:
+    folder = resolve_sent_folder(mail)
+    if not folder:
+        print("WARNING: не удалось определить каноническую папку Sent; письмо отправлено без IMAP APPEND")
+        return None
 
-    if not folders:
-        print("DEBUG APPEND: не найдено ни одной папки для сохранения отправленных")
-        return []
+    try:
+        status, response = mail.append(
+            quote_imap_folder(folder),
+            "\\Seen",
+            imaplib.Time2Internaldate(time.time()),
+            raw_bytes,
+        )
+    except Exception as e:
+        print(f"WARNING: письмо отправлено, но IMAP APPEND в папку {folder!r} завершился ошибкой: {e}")
+        return None
 
-    internal_date = imaplib.Time2Internaldate(datetime.now(timezone.utc))
-    saved_folders = []
+    if status != "OK":
+        print(
+            f"WARNING: письмо отправлено, но IMAP APPEND в папку {folder!r} не удался. "
+            f"Ответ сервера: {response}"
+        )
+        return None
 
-    for folder in folders:
-        try:
-            status, response = mail.append(
-                quote_imap_folder(folder),
-                "\\Seen",
-                internal_date,
-                raw_bytes,
-            )
-            print(f"DEBUG APPEND {folder} = {status}")
-
-            if status == "OK":
-                saved_folders.append(folder)
-            else:
-                print(f"DEBUG APPEND ERROR {folder} = {response}")
-
-        except Exception as e:
-            print(f"DEBUG APPEND EXCEPTION {folder} = {e}")
-
-    return saved_folders
+    return folder
 
 
 def make_sent_log_filename(subject: str) -> Path:
+    SENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     safe_subject = re.sub(r'[\\/:*?"<>|]+', "_", sanitize_header(subject))
     safe_subject = re.sub(r"\s+", "_", safe_subject).strip("_")
     if not safe_subject:
         safe_subject = "sent_message"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     return SENT_LOG_DIR / f"{timestamp}_{safe_subject}.txt"
 
 
@@ -345,11 +429,14 @@ def build_reply_message(
     body: str,
     to_emails: list[str],
     cc_emails: list[str],
-    original_message_id: str,
+    in_reply_to: str,
+    references: str,
 ) -> EmailMessage:
     msg = build_message(subject, body, to_emails, cc_emails)
-    msg["In-Reply-To"] = sanitize_header(original_message_id)
-    msg["References"] = sanitize_header(original_message_id)
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
     return msg
 
 
@@ -372,10 +459,12 @@ def main():
     subject = extract_subject(draft_text)
     body_raw = extract_body(draft_text)
 
+    raw_to_field = extract_simple_field(draft_text, "To")
+    raw_cc_field = extract_simple_field(draft_text, "Cc")
     manual_to = extract_to_emails(draft_text)
     manual_cc = extract_cc_emails(draft_text)
 
-    is_manual_send = len(manual_to) > 0
+    is_manual_send = bool(raw_to_field or raw_cc_field)
 
     if is_manual_send:
         print("MODE = MANUAL SEND")
@@ -388,13 +477,14 @@ def main():
 
         with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as mail:
             mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            original_message_id, original_msg = read_latest_incoming_message_for_thread(
+            _, original_msg = read_latest_incoming_message_for_thread(
                 mail=mail,
                 folder=TARGET_FOLDER,
                 thread_subject=thread_subject,
             )
 
         to_emails, cc_emails = extract_reply_recipients(original_msg)
+        in_reply_to, references = build_references_header(original_msg)
 
         subject_lc = subject.lower()
         if not subject_lc.startswith("re:"):
@@ -405,7 +495,8 @@ def main():
             body=body_raw,
             to_emails=to_emails,
             cc_emails=cc_emails,
-            original_message_id=original_message_id,
+            in_reply_to=in_reply_to,
+            references=references,
         )
 
     to_emails = clean_email_list(to_emails)
@@ -436,21 +527,21 @@ def main():
             to_addrs=all_recipients,
         )
 
-    saved_folders = []
+    saved_folder = None
     try:
         with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as mail:
             mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            saved_folders = append_to_sent(mail, raw_bytes)
+            saved_folder = append_to_sent(mail, raw_bytes)
     except Exception as e:
         print("WARNING: письмо отправлено, но сохранить в отправленные не удалось:", e)
 
     log_file = save_sent_log(subject, to_emails, cc_emails, body_raw)
 
     print("EMAIL SENT SUCCESSFULLY")
-    if saved_folders:
-        print("SAVED TO FOLDERS =", ", ".join(saved_folders))
+    if saved_folder:
+        print("SAVED TO FOLDER =", saved_folder)
     else:
-        print("WARNING: письмо отправлено, но не сохранено ни в одну папку отправленных")
+        print("WARNING: письмо отправлено, но не сохранено в IMAP Sent")
     print("SENT LOG =", log_file)
 
 
