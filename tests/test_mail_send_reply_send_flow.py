@@ -1,4 +1,5 @@
 import importlib
+from email.message import EmailMessage
 from pathlib import Path
 
 import mail_send_reply as send
@@ -70,6 +71,18 @@ def write_manual_draft(tmp_path: Path) -> Path:
         "To: user@example.com\n\n"
         "## Body\n"
         "Hello from tests.\n",
+        encoding="utf-8",
+    )
+    return draft
+
+
+def write_canonical_thread_draft(tmp_path: Path) -> Path:
+    draft = tmp_path / "canonical_thread_draft.md"
+    draft.write_text(
+        "**Subject:** Need update\n"
+        "**Тема ветки:** Canonical thread\n\n"
+        "## Body\n"
+        "Hello from canonical draft.\n",
         encoding="utf-8",
     )
     return draft
@@ -154,5 +167,73 @@ def test_main_calls_smtp_only_when_mail_send_for_real_enabled(monkeypatch, tmp_p
     assert len(smtp_instances[0].send_calls) == 1
     assert smtp_instances[0].send_calls[0][1] == "sender@example.com"
     assert smtp_instances[0].send_calls[0][2] == ["user@example.com"]
+    assert len(imap_instances) == 1
+    assert imap_instances[0].login_calls == [("sender@example.com", "secret")]
+
+
+def test_main_thread_reply_with_canonical_draft_reaches_dry_run_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("MAIL_TARGET_FOLDER", "INBOX/Canonical")
+    send_mod = reload_send_module(monkeypatch, send_for_real=None)
+    draft_path = write_canonical_thread_draft(tmp_path)
+    imap_instances = []
+    captured = {}
+
+    original_msg = EmailMessage()
+    original_msg["From"] = "Client <client@example.com>"
+    original_msg["To"] = "sender@example.com"
+    original_msg["Cc"] = "Observer <observer@example.com>"
+    original_msg["Subject"] = "Canonical thread"
+    original_msg["Message-ID"] = "<orig@example.com>"
+    original_msg["References"] = "<root@example.com>"
+    original_msg.set_content("Original thread message")
+
+    monkeypatch.setattr(send_mod, "IMAP_HOST", "imap.example.com")
+    monkeypatch.setattr(send_mod, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(send_mod, "EMAIL_USERNAME", "sender@example.com")
+    monkeypatch.setattr(send_mod, "EMAIL_PASSWORD", "secret")
+    monkeypatch.setattr(send_mod, "DRAFT_FILE", draft_path)
+
+    def imap_factory(host, port):
+        instance = FakeIMAPContext()
+        imap_instances.append(instance)
+        return instance
+
+    def fake_lookup(mail, folder, thread_subject):
+        captured["lookup_folder"] = folder
+        captured["thread_subject"] = thread_subject
+        return "<orig@example.com>", original_msg
+
+    real_build_reply_message = send_mod.build_reply_message
+
+    def capture_build_reply_message(subject, body, to_emails, cc_emails, in_reply_to, references):
+        captured["subject"] = subject
+        captured["body"] = body
+        captured["to_emails"] = to_emails
+        captured["cc_emails"] = cc_emails
+        captured["in_reply_to"] = in_reply_to
+        captured["references"] = references
+        return real_build_reply_message(subject, body, to_emails, cc_emails, in_reply_to, references)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("SMTP must not be called during dry run")
+
+    monkeypatch.setattr(send_mod.imaplib, "IMAP4_SSL", imap_factory)
+    monkeypatch.setattr(send_mod, "read_latest_incoming_message_for_thread", fake_lookup)
+    monkeypatch.setattr(send_mod, "build_reply_message", capture_build_reply_message)
+    monkeypatch.setattr(send_mod.smtplib, "SMTP_SSL", fail_if_called)
+
+    send_mod.main()
+
+    output = capsys.readouterr().out
+    assert captured["lookup_folder"] == "INBOX/Canonical"
+    assert captured["thread_subject"] == "Canonical thread"
+    assert captured["subject"] == "Re: Need update"
+    assert captured["to_emails"] == ["client@example.com"]
+    assert captured["cc_emails"] == ["observer@example.com"]
+    assert captured["in_reply_to"] == "<orig@example.com>"
+    assert captured["references"] == "<root@example.com> <orig@example.com>"
+    assert captured["body"] == "Hello from canonical draft."
+    assert "MODE = THREAD REPLY" in output
+    assert "DRY RUN: письмо не отправлено" in output
     assert len(imap_instances) == 1
     assert imap_instances[0].login_calls == [("sender@example.com", "secret")]
