@@ -5,6 +5,7 @@ import pytest
 
 import mail_prepare_reply as prepare
 import mail_send_reply as send
+from mail_signature import OUTGOING_SIGNATURE
 
 
 class FakePrepareMail:
@@ -65,6 +66,7 @@ def test_main_generates_canonical_draft_shape(monkeypatch, tmp_path):
     assert send.extract_subject(draft_text) == "Re: Thread subject"
     assert send.extract_thread_subject_from_draft(draft_text) == "Thread subject"
     assert send.extract_body(draft_text).startswith("Dear Shiven,")
+    assert OUTGOING_SIGNATURE in send.extract_body(draft_text)
     assert "## Body" in draft_text
     assert "## Draft reply in English" not in draft_text
 
@@ -88,6 +90,7 @@ def test_build_draft_content_requires_thread_subject_metadata_and_canonical_body
     assert "**Тема ветки:** Thread subject" in draft_text
     assert "**Subject:** Re: Thread subject" in draft_text
     assert "\n## Body\n" in draft_text
+    assert OUTGOING_SIGNATURE in draft_text
 
 
 def test_main_fails_clearly_when_thread_is_not_found(monkeypatch, tmp_path):

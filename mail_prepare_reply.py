@@ -5,6 +5,8 @@ import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from dotenv import dotenv_values
+from mail_folder_aliases import select_folder_with_aliases
+from mail_signature import ensure_outgoing_signature
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -116,7 +118,10 @@ We will appreciate your urgent clarification.
 Best Regards,
 Anton Vasilev
 Procurement Director
-METAHIM LLC
+METAHIM LLC.
+tel.: +79217766880 (Tel./WhatsApp)
+tel.: +74951907375 ext. 103
+WeChat: +66918201426
 """
 
 
@@ -163,9 +168,10 @@ def build_draft_content(items, target_folder: str, target_thread_subject: str):
     items = sorted(items, key=lambda x: x["sort_ts"])
     latest = items[-1]
 
-    body = build_ru_draft().strip()
-    if not body:
+    generated_body = build_ru_draft().strip()
+    if not generated_body:
         raise ValueError("Generated draft body is empty")
+    body = ensure_outgoing_signature(generated_body)
 
     chronology = "\n".join(
         f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
@@ -216,10 +222,12 @@ def main():
     mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
 
     print(f"\n=== SELECT FOLDER: {TARGET_FOLDER} ===")
-    status, data = mail.select(f'"{TARGET_FOLDER}"')
+    status, data, selected_folder = select_folder_with_aliases(mail, TARGET_FOLDER)
     print("SELECT:", status, data)
     if status != "OK":
         raise RuntimeError(f"Cannot open folder {TARGET_FOLDER}")
+    if selected_folder != TARGET_FOLDER:
+        print("SELECTED FOLDER ALIAS:", selected_folder)
 
     status, data = mail.search(None, "ALL")
     print("SEARCH:", status)

@@ -30,6 +30,14 @@ class FakeMail:
         return "OK", [(b"RFC822", b"raw-" + message_id)]
 
 
+class FakeAliasMail(FakeMail):
+    def select(self, folder):
+        self.selected.append(folder)
+        if folder == '"Входящие/Elcon"':
+            return "OK", [b"3"]
+        return "NO", [b"missing"]
+
+
 def test_fetch_recent_rfc822_messages_selects_folder_and_fetches_recent_slice():
     mail = FakeMail(ids=b"1 2 3 4")
 
@@ -38,6 +46,15 @@ def test_fetch_recent_rfc822_messages_selects_folder_and_fetches_recent_slice():
     assert mail.selected == ['"INBOX/Elcon"']
     assert mail.fetched == [(b"3", "(RFC822)"), (b"4", "(RFC822)")]
     assert messages == [(b"3", b"raw-3"), (b"4", b"raw-4")]
+
+
+def test_fetch_recent_rfc822_messages_selects_russian_inbox_alias():
+    mail = FakeAliasMail(ids=b"1")
+
+    messages = fetch_recent_rfc822_messages(mail, "INBOX/Elcon", limit=1)
+
+    assert mail.selected == ['"INBOX/Elcon"', '"Inbox/Elcon"', '"Входящие/Elcon"']
+    assert messages == [(b"1", b"raw-1")]
 
 
 def test_fetch_recent_rfc822_messages_skips_ids_before_fetch():

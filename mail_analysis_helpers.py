@@ -3,6 +3,7 @@ import json
 import re
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from mail_folder_aliases import select_folder_with_aliases
 
 
 def html_to_text(value: str) -> str:
@@ -86,10 +87,12 @@ def parse_message_date_metadata(date_raw: str):
 
 def fetch_recent_rfc822_messages(mail, target_folder: str, limit: int, skip_ids=None):
     print(f"\n=== SELECT FOLDER: {target_folder} ===")
-    status, data = mail.select(f'"{target_folder}"')
+    status, data, selected_folder = select_folder_with_aliases(mail, target_folder)
     print("SELECT:", status, data)
     if status != "OK":
         raise RuntimeError(f"Cannot open folder {target_folder}")
+    if selected_folder != target_folder:
+        print("SELECTED FOLDER ALIAS:", selected_folder)
 
     status, data = mail.search(None, "ALL")
     print("SEARCH:", status)

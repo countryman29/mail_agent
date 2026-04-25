@@ -1,4 +1,5 @@
 import mail_send_reply as send
+from mail_signature import OUTGOING_SIGNATURE
 
 
 class FakeMail:
@@ -19,7 +20,7 @@ Hello from the canonical body.
 ## Internal
 Note
 """
-    assert send.extract_body(draft) == "Hello from the canonical body."
+    assert send.extract_body(draft) == "Hello from the canonical body.\n\n" + OUTGOING_SIGNATURE
 
 
 def test_extract_body_accepts_legacy_alias_with_warning(capsys):
@@ -28,7 +29,7 @@ def test_extract_body_accepts_legacy_alias_with_warning(capsys):
 ## Draft reply in English
 Legacy body text
 """
-    assert send.extract_body(draft) == "Legacy body text"
+    assert send.extract_body(draft) == "Legacy body text\n\n" + OUTGOING_SIGNATURE
     captured = capsys.readouterr()
     assert "устаревший раздел" in captured.out
     assert "## Body" in captured.out
@@ -70,6 +71,36 @@ def test_clean_email_list_accepts_valid_unique_addresses(monkeypatch):
     monkeypatch.setattr(send, "EMAIL_USERNAME", "owner@example.com")
     emails = ["alpha@example.com", "beta@example.com", "alpha@example.com"]
     assert send.clean_email_list(emails) == ["alpha@example.com", "beta@example.com"]
+
+
+def test_extract_fields_support_russian_aliases():
+    draft = """**Тема:** Test subject
+**Кому:** user@example.com
+**Копия:** copy@example.com
+
+## Тело
+Reply text.
+"""
+
+    assert send.extract_subject(draft) == "Test subject"
+    assert send.extract_to_emails(draft) == ["user@example.com"]
+    assert send.extract_cc_emails(draft) == ["copy@example.com"]
+    assert send.extract_body(draft) == "Reply text.\n\n" + OUTGOING_SIGNATURE
+
+
+def test_extract_body_replaces_legacy_signature_with_canonical_signature():
+    draft = """Subject: Test
+
+## Body
+Reply text.
+
+Best Regards,
+Anton Vasilev
+Procurement Director
+METAHIM LLC
+"""
+
+    assert send.extract_body(draft) == "Reply text.\n\n" + OUTGOING_SIGNATURE
 
 
 def test_resolve_sent_folder_prefers_special_use_sent_flag():

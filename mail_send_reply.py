@@ -9,6 +9,8 @@ from email.message import EmailMessage
 from email.header import decode_header
 from email.utils import getaddresses, formatdate, make_msgid, parseaddr
 from dotenv import dotenv_values
+from mail_folder_aliases import quote_imap_folder, select_folder_with_aliases
+from mail_signature import ensure_outgoing_signature
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,7 +56,7 @@ TARGET_FOLDER = env_value("MAIL_TARGET_FOLDER", "INBOX") or "INBOX"
 DRY_RUN = not env_flag("MAIL_SEND_FOR_REAL", default=False)
 
 SENT_LOG_DIR = BASE_DIR / "sent"
-LEGACY_BODY_HEADERS = ["Draft reply in English", "Message", "BODY"]
+LEGACY_BODY_HEADERS = ["Draft reply in English", "Message", "BODY", "Черновик"]
 PLACEHOLDER_RECIPIENTS = {"**", "*", "-", "—", "n/a", "na", "none"}
 PREFERRED_SENT_NAMES = [
     "sent",
@@ -86,11 +88,6 @@ def sanitize_header(value: str | None) -> str:
     return re.sub(r"[\r\n]+", " ", str(value)).strip()
 
 
-def quote_imap_folder(folder_name: str) -> str:
-    escaped = folder_name.replace("\\", "\\\\").replace('"', r"\"")
-    return f'"{escaped}"'
-
-
 def extract_section(text: str, header: str) -> str | None:
     pattern = rf"(?ms)^##\s+{re.escape(header)}\s*\n(.*?)(?=^##\s+|\Z)"
     m = re.search(pattern, text)
@@ -100,15 +97,12 @@ def extract_section(text: str, header: str) -> str | None:
 
 
 def extract_subject(text: str) -> str:
-    m = re.search(r"(?mi)^\*\*Subject:\*\*\s*(.+?)\s*$", text)
-    if m:
-        return sanitize_header(m.group(1))
+    for field_name in ("Subject", "Тема"):
+        value = extract_simple_field(text, field_name)
+        if value:
+            return sanitize_header(value)
 
-    m = re.search(r"(?mi)^Subject:\s*(.+?)\s*$", text)
-    if m:
-        return sanitize_header(m.group(1))
-
-    raise ValueError("Не найдена строка 'Subject:' или '**Subject:**' в draft-файле")
+    raise ValueError("Не найдена строка 'Subject:' / '**Subject:**' или 'Тема:' / '**Тема:**' в draft-файле")
 
 
 def extract_simple_field(text: str, field_name: str) -> str:
@@ -169,23 +163,33 @@ def clean_email_list(emails: list[str]) -> list[str]:
     return cleaned
 
 
+def extract_first_simple_field(text: str, field_names: list[str]) -> str:
+    for field_name in field_names:
+        value = extract_simple_field(text, field_name)
+        if value:
+            return value
+    return ""
+
+
 def extract_to_emails(text: str) -> list[str]:
-    raw = extract_simple_field(text, "To")
+    raw = extract_first_simple_field(text, ["To", "Кому"])
     return clean_email_list(parse_emails_from_line(raw))
 
 
 def extract_cc_emails(text: str) -> list[str]:
-    raw = extract_simple_field(text, "Cc")
+    raw = extract_first_simple_field(text, ["Cc", "CC", "Копия"])
     return clean_email_list(parse_emails_from_line(raw))
 
 
 def extract_body(text: str) -> str:
     canonical_body = extract_section(text, "Body")
+    if canonical_body is None:
+        canonical_body = extract_section(text, "Тело")
     if canonical_body is not None:
         body = canonical_body.strip()
         if not body:
             raise ValueError("Раздел '## Body' найден, но он пустой")
-        return body
+        return ensure_outgoing_signature(body)
 
     for legacy_header in LEGACY_BODY_HEADERS:
         legacy_body = extract_section(text, legacy_header)
@@ -202,7 +206,7 @@ def extract_body(text: str) -> str:
             f"WARNING: используется устаревший раздел '## {legacy_header}'. "
             "Переименуйте его в '## Body'."
         )
-        return body
+        return ensure_outgoing_signature(body)
 
     accepted_legacy = ", ".join(f"'## {header}'" for header in LEGACY_BODY_HEADERS)
     raise ValueError(
@@ -215,6 +219,8 @@ def extract_thread_subject_from_draft(text: str) -> str:
     patterns = [
         r'(?mi)^\*\*Тема ветки:\*\*\s*(.+?)\s*$',
         r'(?mi)^Тема ветки:\s*(.+?)\s*$',
+        r'(?mi)^\*\*Thread subject:\*\*\s*(.+?)\s*$',
+        r'(?mi)^Thread subject:\s*(.+?)\s*$',
     ]
     for pattern in patterns:
         m = re.search(pattern, text)
@@ -245,9 +251,11 @@ def build_references_header(original_msg) -> tuple[str, str]:
 
 
 def read_latest_incoming_message_for_thread(mail, folder: str, thread_subject: str):
-    status, _ = mail.select(quote_imap_folder(folder), readonly=True)
+    status, _, selected_folder = select_folder_with_aliases(mail, folder, readonly=True)
     if status != "OK":
         raise RuntimeError(f"Не удалось открыть папку {folder}")
+    if selected_folder != folder:
+        print("SELECTED FOLDER ALIAS =", selected_folder)
 
     subject_escaped = thread_subject.replace('"', "")
     status, data = mail.search(None, f'(HEADER Subject "{subject_escaped}")')
@@ -257,7 +265,7 @@ def read_latest_incoming_message_for_thread(mail, folder: str, thread_subject: s
     raw_ids = data[0].split() if data and data[0] else []
     if not raw_ids:
         raise RuntimeError(
-            f"Не найдено письмо для reply lookup: тема '{thread_subject}', папка '{folder}'. "
+            f"Не найдено письмо для reply lookup: тема '{thread_subject}', папка '{selected_folder}'. "
             "Проверь MAIL_TARGET_FOLDER и поле '**Тема ветки:**' в draft-файле."
         )
 
@@ -423,7 +431,7 @@ def build_message(subject: str, body: str, to_emails: list[str], cc_emails: list
     msg["Subject"] = sanitize_header(subject)
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
-    msg.set_content(body)
+    msg.set_content(ensure_outgoing_signature(body))
     return msg
 
 
@@ -462,8 +470,8 @@ def main():
     subject = extract_subject(draft_text)
     body_raw = extract_body(draft_text)
 
-    raw_to_field = extract_simple_field(draft_text, "To")
-    raw_cc_field = extract_simple_field(draft_text, "Cc")
+    raw_to_field = extract_first_simple_field(draft_text, ["To", "Кому"])
+    raw_cc_field = extract_first_simple_field(draft_text, ["Cc", "CC", "Копия"])
     manual_to = extract_to_emails(draft_text)
     manual_cc = extract_cc_emails(draft_text)
 

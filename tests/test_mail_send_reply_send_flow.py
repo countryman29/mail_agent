@@ -3,6 +3,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import mail_send_reply as send
+from mail_signature import OUTGOING_SIGNATURE
 
 
 class FakeAppendMail:
@@ -76,6 +77,19 @@ def write_manual_draft(tmp_path: Path) -> Path:
     return draft
 
 
+def write_russian_manual_draft(tmp_path: Path) -> Path:
+    draft = tmp_path / "manual_russian_draft.md"
+    draft.write_text(
+        "**Тема:** Минимальный тест\n"
+        "**Кому:** user@example.com\n"
+        "**Копия:** copy@example.com\n\n"
+        "## Тело\n"
+        "Текст ответа.\n",
+        encoding="utf-8",
+    )
+    return draft
+
+
 def write_canonical_thread_draft(tmp_path: Path) -> Path:
     draft = tmp_path / "canonical_thread_draft.md"
     draft.write_text(
@@ -131,6 +145,45 @@ def test_main_dry_run_does_not_call_smtp_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(send_mod.smtplib, "SMTP_SSL", fail_if_called)
 
     send_mod.main()
+
+
+def test_main_dry_run_supports_russian_draft_fields(monkeypatch, tmp_path, capsys):
+    send_mod = reload_send_module(monkeypatch, send_for_real=None)
+    draft_path = write_russian_manual_draft(tmp_path)
+    captured = {}
+
+    monkeypatch.setattr(send_mod, "IMAP_HOST", "imap.example.com")
+    monkeypatch.setattr(send_mod, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(send_mod, "EMAIL_USERNAME", "sender@example.com")
+    monkeypatch.setattr(send_mod, "EMAIL_PASSWORD", "secret")
+    monkeypatch.setattr(send_mod, "DRAFT_FILE", draft_path)
+
+    real_build_message = send_mod.build_message
+
+    def capture_build_message(subject, body, to_emails, cc_emails):
+        captured["subject"] = subject
+        captured["body"] = body
+        captured["to_emails"] = to_emails
+        captured["cc_emails"] = cc_emails
+        return real_build_message(subject, body, to_emails, cc_emails)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("SMTP must not be called during dry run")
+
+    monkeypatch.setattr(send_mod, "build_message", capture_build_message)
+    monkeypatch.setattr(send_mod.smtplib, "SMTP_SSL", fail_if_called)
+
+    send_mod.main()
+
+    output = capsys.readouterr().out
+    assert captured == {
+        "subject": "Минимальный тест",
+        "body": "Текст ответа.\n\n" + OUTGOING_SIGNATURE,
+        "to_emails": ["user@example.com"],
+        "cc_emails": ["copy@example.com"],
+    }
+    assert "MODE = MANUAL SEND" in output
+    assert "DRY RUN: письмо не отправлено" in output
 
 
 def test_main_calls_smtp_only_when_mail_send_for_real_enabled(monkeypatch, tmp_path):
@@ -232,7 +285,7 @@ def test_main_thread_reply_with_canonical_draft_reaches_dry_run_success(monkeypa
     assert captured["cc_emails"] == ["observer@example.com"]
     assert captured["in_reply_to"] == "<orig@example.com>"
     assert captured["references"] == "<root@example.com> <orig@example.com>"
-    assert captured["body"] == "Hello from canonical draft."
+    assert captured["body"] == "Hello from canonical draft.\n\n" + OUTGOING_SIGNATURE
     assert "MODE = THREAD REPLY" in output
     assert "DRY RUN: письмо не отправлено" in output
     assert len(imap_instances) == 1

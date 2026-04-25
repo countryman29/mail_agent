@@ -1,6 +1,7 @@
 import imaplib
 import os
 from dotenv import load_dotenv
+from mail_folder_aliases import select_folder_with_aliases
 
 load_dotenv()
 
@@ -44,8 +45,10 @@ def main():
             print(decode_imap_line(item))
 
     print("\n=== INBOX CHECK ===")
-    status, data = mail.select("INBOX", readonly=True)
+    status, data, selected_folder = select_folder_with_aliases(mail, "INBOX", readonly=True)
     print("SELECT INBOX:", status, data)
+    if selected_folder != "INBOX":
+        print("SELECTED INBOX ALIAS:", selected_folder)
 
     if status == "OK":
         status, data = mail.search(None, "ALL")

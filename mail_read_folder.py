@@ -4,6 +4,7 @@ import os
 from email.header import decode_header
 from dotenv import load_dotenv
 from mail_analysis_helpers import get_text_from_message
+from mail_folder_aliases import select_folder_with_aliases
 
 load_dotenv()
 
@@ -34,8 +35,10 @@ def main():
     mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
 
     print(f"\n=== SELECT FOLDER: {TARGET_FOLDER} ===")
-    status, data = mail.select(f'"{TARGET_FOLDER}"')
+    status, data, selected_folder = select_folder_with_aliases(mail, TARGET_FOLDER)
     print("SELECT:", status, data)
+    if selected_folder != TARGET_FOLDER:
+        print("SELECTED FOLDER ALIAS:", selected_folder)
 
     if status != "OK":
         raise RuntimeError(f"Cannot open folder {TARGET_FOLDER}")
