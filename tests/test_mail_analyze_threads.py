@@ -67,7 +67,7 @@ def test_build_recommendation_current_priority_order():
     assert analyze.build_recommendation("Статус", []) == "Просмотреть ветку и решить, нужен ли ответ или задача закрыта."
 
 
-def test_render_thread_analysis_outputs_preserves_current_markdown_shape():
+def test_render_thread_analysis_outputs_uses_canonical_markdown_schema():
     items = [
         {
             "id": "12",
@@ -82,6 +82,7 @@ def test_render_thread_analysis_outputs_preserves_current_markdown_shape():
         company_name="Elcon",
         target_folder="INBOX/Elcon",
         subject="Shipment Update",
+        thread_key="shipment_update",
         items=items,
         status_text="Требуется ручная оценка статуса",
         open_questions=["Проверить AWB / статус авианакладной"],
@@ -89,14 +90,29 @@ def test_render_thread_analysis_outputs_preserves_current_markdown_shape():
         urgency="Средняя",
     )
 
-    assert analysis_content.startswith("# Анализ ветки переписки")
+    assert analysis_content.startswith("# Анализ ветки")
     assert "**Контрагент:** Elcon" in analysis_content
     assert "**Папка:** INBOX/Elcon" in analysis_content
     assert "**Тема ветки:** Shipment Update" in analysis_content
+    assert "**Thread key:** shipment_update" in analysis_content
+    assert "**Сообщений:** 1" in analysis_content
+    assert "**Первое письмо:** 2026-04-25 10:00" in analysis_content
+    assert "**Последнее письмо:** 2026-04-25 10:00" in analysis_content
+    assert "## Summary\nCargo update preview" in analysis_content
+    assert "## Status\nТребуется ручная оценка статуса" in analysis_content
+    assert "## Open Questions\n- Проверить AWB / статус авианакладной" in analysis_content
+    assert "## Recommendation\nСверить номер рейса, дату вылета и статус AWB." in analysis_content
+    assert "## Urgency\nСредняя" in analysis_content
     assert "- 2026-04-25 10:00 | sender@example.com | Shipment Update" in analysis_content
-    assert "### Письмо 12" in analysis_content
-    assert "## Открытые вопросы" in analysis_content
+    assert "### Message 12" in analysis_content
+    assert "**Date:** 2026-04-25 10:00" in analysis_content
+    assert "**From:** sender@example.com" in analysis_content
+    assert "**Subject:** Shipment Update" in analysis_content
 
-    assert task_content.startswith("# Задача по ветке переписки")
-    assert "## Требуется участие Антона\nДа" in task_content
-    assert "## Срочность\nСредняя" in task_content
+    assert task_content.startswith("# Задача по ветке")
+    assert "**Папка:** INBOX/Elcon" in task_content
+    assert "**Срочность:** Средняя" in task_content
+    assert "**Требуется участие Антона:** Да" in task_content
+    assert "## Open Questions\n- Проверить AWB / статус авианакладной" in task_content
+    assert "## Status\nТребуется ручная оценка статуса" in task_content
+    assert "## Recommendation\nСверить номер рейса, дату вылета и статус AWB." in task_content

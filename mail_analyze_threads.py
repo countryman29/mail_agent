@@ -170,13 +170,16 @@ def render_thread_analysis_outputs(
     company_name: str,
     target_folder: str,
     subject: str,
+    thread_key: str,
     items: list[dict],
     status_text: str,
     open_questions: list[str],
     recommendation: str,
     urgency: str,
 ) -> tuple[str, str]:
+    first = items[0]
     latest = items[-1]
+    summary = latest["body_preview"] or "Текст письма не извлечен."
     chronology = "\n".join(
         [
             f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
@@ -186,7 +189,7 @@ def render_thread_analysis_outputs(
 
     previews = "\n\n".join(
         [
-            f"### Письмо {x['id']}\n**Дата:** {x['date_display']}\n**От:** {x['from']}\n**Кратко:** {x['body_preview']}"
+            f"### Message {x['id']}\n**Date:** {x['date_display']}\n**From:** {x['from']}\n**Subject:** {clean_subject(x['subject'])}\n\n{x['body_preview']}"
             for x in items
         ]
     )
@@ -194,53 +197,55 @@ def render_thread_analysis_outputs(
     q_block = "\n".join([f"- {q}" for q in open_questions]) if open_questions else "- Явные открытые вопросы не выявлены"
     needs_task = "Да" if open_questions or urgency in ("Высокая", "Средняя") else "Нет"
 
-    analysis_content = f"""# Анализ ветки переписки
+    analysis_content = f"""# Анализ ветки
 
 **Контрагент:** {company_name}  
 **Папка:** {target_folder}  
 **Тема ветки:** {subject}  
-**Сообщений в ветке:** {len(items)}  
+**Thread key:** {thread_key}  
+**Сообщений:** {len(items)}  
+**Первое письмо:** {first['date_display']}  
 **Последнее письмо:** {latest['date_display']}  
 
-## Хронология
-{chronology}
+## Summary
+{summary}
 
-## Текущий статус
+## Status
 {status_text}
 
-## Открытые вопросы
+## Open Questions
 {q_block}
 
-## Рекомендация
+## Recommendation
 {recommendation}
 
-## Срочность
+## Urgency
 {urgency}
 
-## Письма в ветке
+## Chronology
+{chronology}
+
+## Messages
 {previews}
 """
 
-    task_content = f"""# Задача по ветке переписки
+    task_content = f"""# Задача по ветке
 
 **Контрагент:** {company_name}  
+**Папка:** {target_folder}  
 **Тема ветки:** {subject}  
 **Последнее письмо:** {latest['date_display']}  
+**Срочность:** {urgency}  
+**Требуется участие Антона:** {needs_task}  
 
-## Текущий вопрос
+## Open Questions
 {q_block}
 
-## Статус
+## Status
 {status_text}
 
-## Что рекомендует агент
+## Recommendation
 {recommendation}
-
-## Срочность
-{urgency}
-
-## Требуется участие Антона
-{needs_task}
 """
 
     return analysis_content, task_content
@@ -354,6 +359,7 @@ def main():
             company_name=company_name,
             target_folder=TARGET_FOLDER,
             subject=subject,
+            thread_key=thread_key,
             items=items,
             status_text=status_text,
             open_questions=open_questions,
