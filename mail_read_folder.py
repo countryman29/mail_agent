@@ -1,10 +1,9 @@
 import imaplib
 import email
-import html
 import os
-import re
 from email.header import decode_header
 from dotenv import load_dotenv
+from mail_analysis_helpers import get_text_from_message
 
 load_dotenv()
 
@@ -28,50 +27,6 @@ def decode_mime(value):
         else:
             result.append(part)
     return "".join(result)
-
-
-def html_to_text(value: str) -> str:
-    value = re.sub(r"(?is)<(script|style).*?</\1>", " ", value)
-    value = re.sub(r"(?i)<br\s*/?>", "\n", value)
-    value = re.sub(r"(?i)</p\s*>", "\n", value)
-    value = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"\s+", " ", html.unescape(value)).strip()
-
-
-def get_decoded_payload(part):
-    payload = part.get_payload(decode=True)
-    if not payload:
-        return ""
-    charset = part.get_content_charset() or "utf-8"
-    return payload.decode(charset, errors="replace")
-
-
-def get_text_from_message(msg):
-    if msg.is_multipart():
-        html_parts = []
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition", ""))
-
-            if "attachment" in disposition.lower():
-                continue
-
-            if content_type == "text/plain":
-                text = get_decoded_payload(part)
-                if text:
-                    return text
-            if content_type == "text/html":
-                text = get_decoded_payload(part)
-                if text:
-                    html_parts.append(html_to_text(text))
-        return "\n".join(html_parts).strip()
-    else:
-        text = get_decoded_payload(msg)
-        if msg.get_content_type() == "text/html":
-            return html_to_text(text)
-        if text:
-            return text
-        return ""
 
 
 def main():

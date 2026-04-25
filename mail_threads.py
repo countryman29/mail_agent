@@ -1,11 +1,11 @@
 from pathlib import Path
-import html
 import os
 import re
 import imaplib
 import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
+from mail_analysis_helpers import get_text_from_message
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -59,53 +59,6 @@ def clean_subject(subject: str) -> str:
     s = re.sub(r"^\s*((re|fw|fwd)\s*:\s*)+", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\s+", " ", s)
     return s.strip().lower()
-
-
-def html_to_text(value: str) -> str:
-    value = re.sub(r"(?is)<(script|style).*?</\1>", " ", value)
-    value = re.sub(r"(?i)<br\s*/?>", "\n", value)
-    value = re.sub(r"(?i)</p\s*>", "\n", value)
-    value = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"\s+", " ", html.unescape(value)).strip()
-
-
-def get_decoded_payload(part):
-    payload = part.get_payload(decode=True)
-    if not payload:
-        return ""
-    charset = part.get_content_charset() or "utf-8"
-    return payload.decode(charset, errors="replace")
-
-
-def get_text_from_message(msg):
-    if msg.is_multipart():
-        plain_parts = []
-        html_parts = []
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition", ""))
-
-            if "attachment" in disposition.lower():
-                continue
-
-            if content_type == "text/plain":
-                text = get_decoded_payload(part)
-                if text:
-                    plain_parts.append(text)
-            elif content_type == "text/html":
-                text = get_decoded_payload(part)
-                if text:
-                    html_parts.append(html_to_text(text))
-        if plain_parts:
-            return "\n".join(plain_parts).strip()
-        return "\n".join(html_parts).strip()
-    else:
-        text = get_decoded_payload(msg)
-        if msg.get_content_type() == "text/html":
-            return html_to_text(text)
-        if text:
-            return text.strip()
-    return ""
 
 
 def short_text(text, limit=400):
