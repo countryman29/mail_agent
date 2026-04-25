@@ -161,6 +161,74 @@ def extract_company_from_folder(folder_name: str):
     return folder_name
 
 
+def render_message_analysis_outputs(
+    company_name: str,
+    target_folder: str,
+    message_id: str,
+    date_display: str,
+    from_: str,
+    subject: str,
+    summary: str,
+    body_preview: str,
+    open_questions: list[str],
+    recommendation: str,
+    urgency: str,
+) -> tuple[str, str]:
+    q_block = "\n".join([f"- {q}" for q in open_questions]) if open_questions else "- Явные открытые вопросы не выявлены"
+    status = "Новая" if open_questions else "Без задачи"
+    needs_human = "Да" if open_questions or urgency in ("Высокая", "Средняя") else "Нет"
+
+    analysis_content = f"""# Анализ письма
+
+**Контрагент:** {company_name}  
+**Папка:** {target_folder}  
+**Message ID:** {message_id}  
+**Дата:** {date_display}  
+**От:** {from_}  
+**Тема:** {subject}  
+
+## Summary
+{summary}
+
+## Status
+{status}
+
+## Open Questions
+{q_block}
+
+## Recommendation
+{recommendation}
+
+## Urgency
+{urgency}
+
+## Body Preview
+{body_preview or "Текст письма не извлечен."}
+"""
+
+    task_content = f"""# Задача по письму
+
+**Контрагент:** {company_name}  
+**Папка:** {target_folder}  
+**Message ID:** {message_id}  
+**Дата:** {date_display}  
+**Тема:** {subject}  
+**Срочность:** {urgency}  
+**Требуется участие Антона:** {needs_human}  
+
+## Open Questions
+{q_block}
+
+## Status
+{status}
+
+## Recommendation
+{recommendation}
+"""
+
+    return analysis_content, task_content
+
+
 def main():
     print("DEBUG ENV PATH =", ENV_PATH)
     print("DEBUG IMAP_HOST =", repr(IMAP_HOST))
@@ -240,58 +308,19 @@ def main():
 
         summary = body_preview if body_preview else "Текст письма не извлечен."
 
-        if open_questions:
-            task_block = "\n".join([f"- {q}" for q in open_questions])
-            task_status = "Новая"
-        else:
-            task_block = "- Явные открытые вопросы не выявлены"
-            task_status = "Без задачи"
-
-        analysis_content = f"""# Анализ письма
-
-**Контрагент:** {company_name}  
-**Папка:** {TARGET_FOLDER}  
-**Дата письма:** {date_display}  
-**От:** {from_}  
-**Тема:** {clean_subj}  
-**Message-ID:** {message_id_header or msg_id_local}  
-**Локальный ID:** {msg_id_local}  
-
-## Краткая суть
-{summary}
-
-## Перевод / смысл на русском
-{summary}
-
-## Открытые вопросы
-{task_block}
-
-## Рекомендация
-{recommendation}
-
-## Срочность
-{urgency}
-"""
-
-        task_content = f"""# Задача по письму
-
-**Контрагент:** {company_name}  
-**Дата письма:** {date_display}  
-**Тема:** {clean_subj}  
-**Локальный ID письма:** {msg_id_local}  
-
-## Вопрос
-{task_block}
-
-## Что рекомендует агент
-{recommendation}
-
-## Срочность
-{urgency}
-
-## Статус
-{task_status}
-"""
+        analysis_content, task_content = render_message_analysis_outputs(
+            company_name=company_name,
+            target_folder=TARGET_FOLDER,
+            message_id=message_id_header or msg_id_local,
+            date_display=date_display,
+            from_=from_,
+            subject=clean_subj,
+            summary=summary,
+            body_preview=body_preview,
+            open_questions=open_questions,
+            recommendation=recommendation,
+            urgency=urgency,
+        )
 
         with open(analysis_file, "w", encoding="utf-8") as f:
             f.write(analysis_content)
