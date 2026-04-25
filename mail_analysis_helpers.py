@@ -1,6 +1,7 @@
 import html
 import json
 import re
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 
@@ -65,6 +66,22 @@ def load_json_state(path: Path, default: dict):
     for key, value in fallback.items():
         state.setdefault(key, value)
     return state
+
+
+def parse_message_date_metadata(date_raw: str):
+    try:
+        dt = parsedate_to_datetime(date_raw)
+        return {
+            "date_folder": dt.strftime("%Y-%m-%d"),
+            "date_display": dt.strftime("%Y-%m-%d %H:%M"),
+            "sort_ts": dt.timestamp(),
+        }
+    except Exception:
+        return {
+            "date_folder": "unknown_date",
+            "date_display": date_raw or "unknown",
+            "sort_ts": 0,
+        }
 
 
 def fetch_recent_rfc822_messages(mail, target_folder: str, limit: int, skip_ids=None):

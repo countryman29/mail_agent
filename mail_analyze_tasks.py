@@ -5,12 +5,12 @@ import json
 import imaplib
 import email
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
 from dotenv import dotenv_values
 from mail_analysis_helpers import (
     fetch_recent_rfc822_messages,
     get_text_from_message,
     load_json_state,
+    parse_message_date_metadata,
     write_dated_analysis_outputs,
 )
 
@@ -238,13 +238,9 @@ def main():
         body = get_text_from_message(msg)
         body_preview = short_text(body)
 
-        try:
-            dt = parsedate_to_datetime(date_raw)
-            date_folder = dt.strftime("%Y-%m-%d")
-            date_display = dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            date_folder = "unknown_date"
-            date_display = date_raw or "unknown"
+        date_metadata = parse_message_date_metadata(date_raw)
+        date_folder = date_metadata["date_folder"]
+        date_display = date_metadata["date_display"]
 
         clean_subj = clean_subject(subject)
         thread_slug = slugify(clean_subj) or "no_subject"

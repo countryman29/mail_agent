@@ -1,6 +1,10 @@
 import pytest
 
-from mail_analysis_helpers import fetch_recent_rfc822_messages, write_dated_analysis_outputs
+from mail_analysis_helpers import (
+    fetch_recent_rfc822_messages,
+    parse_message_date_metadata,
+    write_dated_analysis_outputs,
+)
 
 
 class FakeMail:
@@ -80,3 +84,26 @@ def test_write_dated_analysis_outputs_creates_directories_and_writes_files(tmp_p
     assert task_file == tmp_path / "tasks" / "Elcon" / "2026-04-25" / "shipment_update_thread.md"
     assert analysis_file.read_text(encoding="utf-8") == "# Analysis\nBody"
     assert task_file.read_text(encoding="utf-8") == "# Task\nBody"
+
+
+def test_parse_message_date_metadata_returns_folder_display_and_sort_timestamp():
+    metadata = parse_message_date_metadata("Sat, 25 Apr 2026 10:30:00 +0000")
+
+    assert metadata == {
+        "date_folder": "2026-04-25",
+        "date_display": "2026-04-25 10:30",
+        "sort_ts": 1777113000.0,
+    }
+
+
+def test_parse_message_date_metadata_preserves_existing_invalid_date_fallbacks():
+    assert parse_message_date_metadata("not a date") == {
+        "date_folder": "unknown_date",
+        "date_display": "not a date",
+        "sort_ts": 0,
+    }
+    assert parse_message_date_metadata("") == {
+        "date_folder": "unknown_date",
+        "date_display": "unknown",
+        "sort_ts": 0,
+    }

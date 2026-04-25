@@ -4,12 +4,12 @@ import json
 import imaplib
 import email
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
 from dotenv import dotenv_values
 from mail_analysis_helpers import (
     fetch_recent_rfc822_messages,
     get_text_from_message,
     load_json_state,
+    parse_message_date_metadata,
     write_dated_analysis_outputs,
 )
 
@@ -256,15 +256,7 @@ def main():
         date_raw = decode_mime(msg.get("Date"))
         body = get_text_from_message(msg)
 
-        try:
-            dt = parsedate_to_datetime(date_raw)
-            sort_ts = dt.timestamp()
-            date_folder = dt.strftime("%Y-%m-%d")
-            date_display = dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            sort_ts = 0
-            date_folder = "unknown_date"
-            date_display = date_raw or "unknown"
+        date_metadata = parse_message_date_metadata(date_raw)
 
         thread_subject = clean_subject(subject)
         thread_key = slugify(thread_subject)
@@ -272,13 +264,13 @@ def main():
         item = {
             "id": num.decode(),
             "date_raw": date_raw,
-            "date_display": date_display,
-            "date_folder": date_folder,
+            "date_display": date_metadata["date_display"],
+            "date_folder": date_metadata["date_folder"],
             "from": from_,
             "subject": subject,
             "body": body,
             "body_preview": short_text(body),
-            "sort_ts": sort_ts,
+            "sort_ts": date_metadata["sort_ts"],
         }
 
         threads.setdefault(thread_key, {"subject": thread_subject, "items": []})
