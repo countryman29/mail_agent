@@ -65,3 +65,33 @@ def load_json_state(path: Path, default: dict):
     for key, value in fallback.items():
         state.setdefault(key, value)
     return state
+
+
+def fetch_recent_rfc822_messages(mail, target_folder: str, limit: int, skip_ids=None):
+    print(f"\n=== SELECT FOLDER: {target_folder} ===")
+    status, data = mail.select(f'"{target_folder}"')
+    print("SELECT:", status, data)
+    if status != "OK":
+        raise RuntimeError(f"Cannot open folder {target_folder}")
+
+    status, data = mail.search(None, "ALL")
+    print("SEARCH:", status)
+    if status != "OK":
+        raise RuntimeError("Search failed")
+
+    ids = data[0].split()[-limit:]
+    skip_ids = set(skip_ids or [])
+    messages = []
+
+    for num in ids:
+        msg_id_local = num.decode()
+        if msg_id_local in skip_ids:
+            continue
+
+        status, msg_data = mail.fetch(num, "(RFC822)")
+        if status != "OK":
+            continue
+
+        messages.append((num, msg_data[0][1]))
+
+    return messages

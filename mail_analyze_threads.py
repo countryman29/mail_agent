@@ -6,7 +6,7 @@ import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from dotenv import dotenv_values
-from mail_analysis_helpers import get_text_from_message, load_json_state
+from mail_analysis_helpers import fetch_recent_rfc822_messages, get_text_from_message, load_json_state
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -241,26 +241,9 @@ def main():
     mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
 
-    print(f"\n=== SELECT FOLDER: {TARGET_FOLDER} ===")
-    status, data = mail.select(f'"{TARGET_FOLDER}"')
-    print("SELECT:", status, data)
-    if status != "OK":
-        raise RuntimeError(f"Cannot open folder {TARGET_FOLDER}")
-
-    status, data = mail.search(None, "ALL")
-    print("SEARCH:", status)
-    if status != "OK":
-        raise RuntimeError("Search failed")
-
-    ids = data[0].split()[-LIMIT:]
     threads = {}
 
-    for num in ids:
-        status, msg_data = mail.fetch(num, "(RFC822)")
-        if status != "OK":
-            continue
-
-        raw_email = msg_data[0][1]
+    for num, raw_email in fetch_recent_rfc822_messages(mail, TARGET_FOLDER, LIMIT):
         msg = email.message_from_bytes(raw_email)
 
         subject = decode_mime(msg.get("Subject"))
