@@ -166,6 +166,86 @@ def company_from_folder(folder: str):
     return folder
 
 
+def render_thread_analysis_outputs(
+    company_name: str,
+    target_folder: str,
+    subject: str,
+    items: list[dict],
+    status_text: str,
+    open_questions: list[str],
+    recommendation: str,
+    urgency: str,
+) -> tuple[str, str]:
+    latest = items[-1]
+    chronology = "\n".join(
+        [
+            f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
+            for x in items
+        ]
+    )
+
+    previews = "\n\n".join(
+        [
+            f"### Письмо {x['id']}\n**Дата:** {x['date_display']}\n**От:** {x['from']}\n**Кратко:** {x['body_preview']}"
+            for x in items
+        ]
+    )
+
+    q_block = "\n".join([f"- {q}" for q in open_questions]) if open_questions else "- Явные открытые вопросы не выявлены"
+    needs_task = "Да" if open_questions or urgency in ("Высокая", "Средняя") else "Нет"
+
+    analysis_content = f"""# Анализ ветки переписки
+
+**Контрагент:** {company_name}  
+**Папка:** {target_folder}  
+**Тема ветки:** {subject}  
+**Сообщений в ветке:** {len(items)}  
+**Последнее письмо:** {latest['date_display']}  
+
+## Хронология
+{chronology}
+
+## Текущий статус
+{status_text}
+
+## Открытые вопросы
+{q_block}
+
+## Рекомендация
+{recommendation}
+
+## Срочность
+{urgency}
+
+## Письма в ветке
+{previews}
+"""
+
+    task_content = f"""# Задача по ветке переписки
+
+**Контрагент:** {company_name}  
+**Тема ветки:** {subject}  
+**Последнее письмо:** {latest['date_display']}  
+
+## Текущий вопрос
+{q_block}
+
+## Статус
+{status_text}
+
+## Что рекомендует агент
+{recommendation}
+
+## Срочность
+{urgency}
+
+## Требуется участие Антона
+{needs_task}
+"""
+
+    return analysis_content, task_content
+
+
 def main():
     print("DEBUG ENV PATH =", ENV_PATH)
     print("DEBUG IMAP_HOST =", repr(IMAP_HOST))
@@ -270,71 +350,16 @@ def main():
         analysis_file = analysis_path / f"{thread_key}_thread.md"
         task_file = task_path / f"{thread_key}_thread.md"
 
-        chronology = "\n".join(
-            [
-                f"- {x['date_display']} | {x['from']} | {clean_subject(x['subject'])}"
-                for x in items
-            ]
+        analysis_content, task_content = render_thread_analysis_outputs(
+            company_name=company_name,
+            target_folder=TARGET_FOLDER,
+            subject=subject,
+            items=items,
+            status_text=status_text,
+            open_questions=open_questions,
+            recommendation=recommendation,
+            urgency=urgency,
         )
-
-        previews = "\n\n".join(
-            [
-                f"### Письмо {x['id']}\n**Дата:** {x['date_display']}\n**От:** {x['from']}\n**Кратко:** {x['body_preview']}"
-                for x in items
-            ]
-        )
-
-        q_block = "\n".join([f"- {q}" for q in open_questions]) if open_questions else "- Явные открытые вопросы не выявлены"
-        needs_task = "Да" if open_questions or urgency in ("Высокая", "Средняя") else "Нет"
-
-        analysis_content = f"""# Анализ ветки переписки
-
-**Контрагент:** {company_name}  
-**Папка:** {TARGET_FOLDER}  
-**Тема ветки:** {subject}  
-**Сообщений в ветке:** {len(items)}  
-**Последнее письмо:** {latest['date_display']}  
-
-## Хронология
-{chronology}
-
-## Текущий статус
-{status_text}
-
-## Открытые вопросы
-{q_block}
-
-## Рекомендация
-{recommendation}
-
-## Срочность
-{urgency}
-
-## Письма в ветке
-{previews}
-"""
-
-        task_content = f"""# Задача по ветке переписки
-
-**Контрагент:** {company_name}  
-**Тема ветки:** {subject}  
-**Последнее письмо:** {latest['date_display']}  
-
-## Текущий вопрос
-{q_block}
-
-## Статус
-{status_text}
-
-## Что рекомендует агент
-{recommendation}
-
-## Срочность
-{urgency}
-
-## Требуется участие Антона
-{needs_task}
-"""
 
         with open(analysis_file, "w", encoding="utf-8") as f:
             f.write(analysis_content)
