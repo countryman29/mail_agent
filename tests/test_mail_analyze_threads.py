@@ -33,6 +33,24 @@ def test_get_text_from_message_joins_plain_text_parts_and_skips_attachments():
     assert analyze.get_text_from_message(msg) == "First part"
 
 
+def test_get_text_from_message_extracts_html_when_plain_text_is_missing():
+    msg = EmailMessage()
+    msg.set_content("<html><body><p>Hello <b>HTML</b></p><br>Next&nbsp;line</body></html>", subtype="html")
+
+    assert analyze.get_text_from_message(msg) == "Hello HTML Next line"
+
+
+def test_load_state_returns_default_for_missing_or_corrupt_state(monkeypatch, tmp_path):
+    missing_state = tmp_path / "missing.json"
+    monkeypatch.setattr(analyze, "STATE_PATH", missing_state)
+    assert analyze.load_state() == {"processed_message_ids": [], "processed_thread_keys": []}
+
+    corrupt_state = tmp_path / "mail_state.json"
+    corrupt_state.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(analyze, "STATE_PATH", corrupt_state)
+    assert analyze.load_state() == {"processed_message_ids": [], "processed_thread_keys": []}
+
+
 def test_detect_open_questions_deduplicates_keyword_matches():
     questions = analyze.detect_open_questions(
         "Please confirm the shipment and confirm AWB status. Please find the attachment."
