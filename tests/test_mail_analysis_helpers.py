@@ -1,6 +1,6 @@
 import pytest
 
-from mail_analysis_helpers import fetch_recent_rfc822_messages
+from mail_analysis_helpers import fetch_recent_rfc822_messages, write_dated_analysis_outputs
 
 
 class FakeMail:
@@ -63,3 +63,20 @@ def test_fetch_recent_rfc822_messages_raises_when_search_fails():
 
     with pytest.raises(RuntimeError, match="Search failed"):
         fetch_recent_rfc822_messages(mail, "INBOX/Elcon", limit=1)
+
+
+def test_write_dated_analysis_outputs_creates_directories_and_writes_files(tmp_path):
+    analysis_file, task_file = write_dated_analysis_outputs(
+        analysis_dir=tmp_path / "analysis",
+        tasks_dir=tmp_path / "tasks",
+        company_name="Elcon",
+        date_folder="2026-04-25",
+        filename="shipment_update_thread.md",
+        analysis_content="# Analysis\nBody",
+        task_content="# Task\nBody",
+    )
+
+    assert analysis_file == tmp_path / "analysis" / "Elcon" / "2026-04-25" / "shipment_update_thread.md"
+    assert task_file == tmp_path / "tasks" / "Elcon" / "2026-04-25" / "shipment_update_thread.md"
+    assert analysis_file.read_text(encoding="utf-8") == "# Analysis\nBody"
+    assert task_file.read_text(encoding="utf-8") == "# Task\nBody"

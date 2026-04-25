@@ -7,7 +7,12 @@ import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from dotenv import dotenv_values
-from mail_analysis_helpers import fetch_recent_rfc822_messages, get_text_from_message, load_json_state
+from mail_analysis_helpers import (
+    fetch_recent_rfc822_messages,
+    get_text_from_message,
+    load_json_state,
+    write_dated_analysis_outputs,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -244,15 +249,6 @@ def main():
         clean_subj = clean_subject(subject)
         thread_slug = slugify(clean_subj) or "no_subject"
 
-        analysis_path = ANALYSIS_DIR / company_name / date_folder
-        task_path = TASKS_DIR / company_name / date_folder
-
-        analysis_path.mkdir(parents=True, exist_ok=True)
-        task_path.mkdir(parents=True, exist_ok=True)
-
-        analysis_file = analysis_path / f"{thread_slug}_message_{msg_id_local}.md"
-        task_file = task_path / f"{thread_slug}_message_{msg_id_local}.md"
-
         open_questions = detect_open_questions(body)
         urgency = detect_urgency(body)
         recommendation = build_recommendation(open_questions)
@@ -273,11 +269,15 @@ def main():
             urgency=urgency,
         )
 
-        with open(analysis_file, "w", encoding="utf-8") as f:
-            f.write(analysis_content)
-
-        with open(task_file, "w", encoding="utf-8") as f:
-            f.write(task_content)
+        analysis_file, task_file = write_dated_analysis_outputs(
+            analysis_dir=ANALYSIS_DIR,
+            tasks_dir=TASKS_DIR,
+            company_name=company_name,
+            date_folder=date_folder,
+            filename=f"{thread_slug}_message_{msg_id_local}.md",
+            analysis_content=analysis_content,
+            task_content=task_content,
+        )
 
         print("ANALYZED:", analysis_file)
         print("TASK:", task_file)

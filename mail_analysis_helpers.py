@@ -95,3 +95,29 @@ def fetch_recent_rfc822_messages(mail, target_folder: str, limit: int, skip_ids=
         messages.append((num, msg_data[0][1]))
 
     return messages
+
+
+def write_dated_analysis_outputs(
+    analysis_dir: Path,
+    tasks_dir: Path,
+    company_name: str,
+    date_folder: str,
+    filename: str,
+    analysis_content: str,
+    task_content: str,
+):
+    analysis_path = analysis_dir / company_name / date_folder
+    task_path = tasks_dir / company_name / date_folder
+    analysis_path.mkdir(parents=True, exist_ok=True)
+    task_path.mkdir(parents=True, exist_ok=True)
+
+    analysis_file = analysis_path / filename
+    task_file = task_path / filename
+
+    with open(analysis_file, "w", encoding="utf-8") as f:
+        f.write(analysis_content)
+
+    with open(task_file, "w", encoding="utf-8") as f:
+        f.write(task_content)
+
+    return analysis_file, task_file
