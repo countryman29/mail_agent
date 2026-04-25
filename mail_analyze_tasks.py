@@ -291,6 +291,7 @@ def main():
     print("\nDone.")
     print("New analyzed messages:", analyzed_count)
     print("State file:", STATE_PATH)
+    return analyzed_count
 
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ def test_mail_analyze_tasks_main_creates_outputs_and_updates_state(monkeypatch, 
     )
     configure_analysis_module(monkeypatch, mail_analyze_tasks, tmp_path, fake_imap)
 
-    mail_analyze_tasks.main()
+    result = mail_analyze_tasks.main()
 
     analysis_files = list((tmp_path / "analysis").rglob("*.md"))
     task_files = list((tmp_path / "tasks").rglob("*.md"))
@@ -75,6 +75,7 @@ def test_mail_analyze_tasks_main_creates_outputs_and_updates_state(monkeypatch, 
     assert "# Анализ письма" in analysis_files[0].read_text(encoding="utf-8")
     assert "# Задача по письму" in task_files[0].read_text(encoding="utf-8")
     assert state["processed_message_ids"] == ["1"]
+    assert result == 1
     assert fake_imap.logged_in is True
     assert fake_imap.logged_out is True
 
@@ -98,7 +99,7 @@ def test_mail_analyze_threads_main_creates_outputs_and_updates_state(monkeypatch
     )
     configure_analysis_module(monkeypatch, mail_analyze_threads, tmp_path, fake_imap)
 
-    mail_analyze_threads.main()
+    result = mail_analyze_threads.main()
 
     analysis_files = list((tmp_path / "analysis").rglob("*.md"))
     task_files = list((tmp_path / "tasks").rglob("*.md"))
@@ -109,5 +110,6 @@ def test_mail_analyze_threads_main_creates_outputs_and_updates_state(monkeypatch
     assert "# Анализ ветки" in analysis_files[0].read_text(encoding="utf-8")
     assert "# Задача по ветке" in task_files[0].read_text(encoding="utf-8")
     assert state["processed_thread_keys"] == ["shipment_update"]
+    assert result == 1
     assert fake_imap.logged_in is True
     assert fake_imap.logged_out is True

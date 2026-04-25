@@ -16,17 +16,15 @@ def main(mode: str | None = None):
     mode = normalize_mode(mode or os.getenv(MODE_ENV_VAR))
 
     if mode in ("messages", "message", "tasks", "task"):
-        mail_analyze_tasks.main()
-        return
+        return {"mode": "messages", "messages": mail_analyze_tasks.main(), "threads": 0}
 
     if mode in ("threads", "thread"):
-        mail_analyze_threads.main()
-        return
+        return {"mode": "threads", "messages": 0, "threads": mail_analyze_threads.main()}
 
     if mode == "both":
-        mail_analyze_tasks.main()
-        mail_analyze_threads.main()
-        return
+        messages = mail_analyze_tasks.main()
+        threads = mail_analyze_threads.main()
+        return {"mode": "both", "messages": messages, "threads": threads}
 
     raise ValueError(f"Unknown analysis mode: {mode}. Use 'messages', 'threads', or 'both'.")
 

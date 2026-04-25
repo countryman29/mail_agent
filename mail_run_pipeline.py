@@ -18,8 +18,17 @@ def main(mode: str | None = None, reset: bool | None = None):
     if should_reset:
         mail_reset_analysis_state.main()
 
-    mail_run_analysis.main(selected_mode)
-    print(f"Pipeline complete: mode={selected_mode}, reset={should_reset}")
+    result = mail_run_analysis.main(selected_mode)
+    print("Pipeline complete")
+    print(f"Mode: {result['mode']}")
+    print(f"Reset: {should_reset}")
+    print(f"Messages analyzed: {result['messages']}")
+    print(f"Threads analyzed: {result['threads']}")
+    print(f"State file: {mail_reset_analysis_state.STATE_PATH}")
+    print("Output folders:")
+    print("  - analysis/")
+    print("  - tasks/")
+    return result
 
 
 if __name__ == "__main__":

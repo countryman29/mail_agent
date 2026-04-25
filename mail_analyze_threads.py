@@ -337,6 +337,7 @@ def main():
     print("\nDone.")
     print("Threads analyzed:", created)
     print("State file:", STATE_PATH)
+    return created
 
 
 if __name__ == "__main__":
