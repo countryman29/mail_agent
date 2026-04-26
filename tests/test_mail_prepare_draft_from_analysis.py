@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -129,8 +130,82 @@ def test_main_prints_created_draft_path(monkeypatch, tmp_path, capsys):
     assert f"Draft created: {draft_path}" in capsys.readouterr().out
 
 
-def test_main_requires_source_path(monkeypatch):
-    monkeypatch.setattr(prepare.sys, "argv", ["mail_prepare_draft_from_analysis.py"])
+def test_main_requires_source_path():
+    with pytest.raises(SystemExit, match="Source path is required"):
+        prepare.main(argv=[])
 
-    with pytest.raises(SystemExit, match="Usage:"):
-        prepare.main()
+
+def test_main_default_dry_run_does_not_write_file(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "analysis.md"
+    source.write_text("**Тема:** Test\n", encoding="utf-8")
+    output_dir = tmp_path / "drafts"
+    monkeypatch.setattr(prepare, "DRAFTS_DIR", output_dir)
+    monkeypatch.setattr(prepare, "load_safe_config", lambda *args, **kwargs: ({}, {"automation_mode": False}))
+
+    result = prepare.main(argv=[str(source)])
+
+    expected_draft = output_dir / "analysis_draft.md"
+    assert result["status"] == "ok"
+    assert result["dry_run"] is True
+    assert result["no_send"] is True
+    assert result["readonly"] is True
+    assert result["human_review_required"] is True
+    assert result["output_paths"] == [str(expected_draft)]
+    assert not expected_draft.exists()
+    assert "Dry run: draft not created. Would create:" in capsys.readouterr().out
+
+
+def test_main_real_run_writes_draft_file(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "analysis.md"
+    source.write_text("**Тема:** Test\n", encoding="utf-8")
+    output_dir = tmp_path / "drafts"
+    monkeypatch.setattr(prepare, "load_safe_config", lambda *args, **kwargs: ({}, {"automation_mode": False}))
+
+    result = prepare.main(argv=[str(source), "--real-run", "--output-dir", str(output_dir)])
+
+    expected_draft = output_dir / "analysis_draft.md"
+    assert result["status"] == "ok"
+    assert result["dry_run"] is False
+    assert expected_draft.exists()
+    assert expected_draft.read_text(encoding="utf-8").startswith("SUBJECT: Re: Test\n")
+    assert f"Draft created: {expected_draft}" in capsys.readouterr().out
+
+
+def test_main_json_output(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "analysis.md"
+    source.write_text("**Тема:** Test\n", encoding="utf-8")
+    monkeypatch.setattr(prepare, "load_safe_config", lambda *args, **kwargs: ({}, {"automation_mode": False}))
+
+    result = prepare.main(argv=[str(source), "--output-json"])
+
+    captured = capsys.readouterr().out.strip()
+    parsed = json.loads(captured)
+    assert parsed == result
+    assert parsed["status"] == "ok"
+    assert parsed["dry_run"] is True
+
+
+def test_main_fails_for_invalid_source_path(monkeypatch):
+    monkeypatch.setattr(prepare, "load_safe_config", lambda *args, **kwargs: ({}, {"automation_mode": False}))
+
+    with pytest.raises(SystemExit, match="Source file not found"):
+        prepare.main(argv=["/tmp/definitely-missing-analysis.md"])
+
+
+def test_main_fails_for_invalid_extension(monkeypatch, tmp_path):
+    source = tmp_path / "analysis.json"
+    source.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(prepare, "load_safe_config", lambda *args, **kwargs: ({}, {"automation_mode": False}))
+
+    with pytest.raises(SystemExit, match="supported extensions"):
+        prepare.main(argv=[str(source)])
+
+
+def test_script_has_no_imap_or_smtp_imports():
+    script_text = Path(prepare.__file__).read_text(encoding="utf-8")
+
+    assert "import imaplib" not in script_text
+    assert "import smtplib" not in script_text
+    assert "IMAP4_SSL" not in script_text
+    assert "SMTP_SSL" not in script_text
+
