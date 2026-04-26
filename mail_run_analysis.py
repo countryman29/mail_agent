@@ -1,5 +1,7 @@
 import os
 import argparse
+import io
+from contextlib import redirect_stdout
 
 import mail_analyze_tasks
 import mail_analyze_threads
@@ -55,6 +57,13 @@ def _extract_output_paths(result: dict[str, object] | int) -> list[str]:
     return []
 
 
+def _run_child_analysis(main_fn, child_argv: list[str], suppress_stdout: bool):
+    if not suppress_stdout:
+        return main_fn(argv=child_argv)
+    with io.StringIO() as buffer, redirect_stdout(buffer):
+        return main_fn(argv=child_argv)
+
+
 def main(argv: list[str] | None = None, mode: str | None = None):
     # Legacy compatibility: allow main("messages") style calls.
     if isinstance(argv, str) and mode is None:
@@ -71,18 +80,27 @@ def main(argv: list[str] | None = None, mode: str | None = None):
     threads_result: dict[str, object] | int = 0
     warnings: list[str] = []
     output_paths: list[str] = []
+    suppress_child_stdout = bool(args.output_json)
 
     if resolved_mode in ("messages", "message", "tasks", "task"):
-        messages_result = mail_analyze_tasks.main(argv=child_argv)
+        messages_result = _run_child_analysis(
+            mail_analyze_tasks.main, child_argv, suppress_stdout=suppress_child_stdout
+        )
         output_paths.extend(_extract_output_paths(messages_result))
         mode_out = "messages"
     elif resolved_mode in ("threads", "thread"):
-        threads_result = mail_analyze_threads.main(argv=child_argv)
+        threads_result = _run_child_analysis(
+            mail_analyze_threads.main, child_argv, suppress_stdout=suppress_child_stdout
+        )
         output_paths.extend(_extract_output_paths(threads_result))
         mode_out = "threads"
     elif resolved_mode == "both":
-        messages_result = mail_analyze_tasks.main(argv=child_argv)
-        threads_result = mail_analyze_threads.main(argv=child_argv)
+        messages_result = _run_child_analysis(
+            mail_analyze_tasks.main, child_argv, suppress_stdout=suppress_child_stdout
+        )
+        threads_result = _run_child_analysis(
+            mail_analyze_threads.main, child_argv, suppress_stdout=suppress_child_stdout
+        )
         output_paths.extend(_extract_output_paths(messages_result))
         output_paths.extend(_extract_output_paths(threads_result))
         mode_out = "both"

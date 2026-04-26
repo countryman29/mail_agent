@@ -170,9 +170,22 @@ def test_main_propagates_child_argv(monkeypatch, tmp_path):
 def test_main_output_json_contains_required_fields(monkeypatch, tmp_path, capsys):
     calls, summary_path = patch_pipeline_deps(monkeypatch, tmp_path)
 
+    def noisy_analysis_main(argv=None):
+        print("NOISY_ANALYSIS_LOG")
+        calls.append(("analysis", argv))
+        return {
+            "status": "ok",
+            "counts": {"messages": 2, "threads": 3},
+            "output_paths": ["analysis/a.md", "tasks/a.md"],
+        }
+
+    monkeypatch.setattr(mail_run_pipeline.mail_run_analysis, "main", noisy_analysis_main)
+
     result = mail_run_pipeline.main(argv=["--mode", "both", "--output-json", "--real-run"])
 
-    parsed = json.loads(capsys.readouterr().out.strip())
+    printed = capsys.readouterr().out.strip()
+    assert len(printed.splitlines()) == 1
+    parsed = json.loads(printed)
     assert result == parsed
     assert parsed["status"] == "ok"
     assert parsed["command"] == "mail_run_pipeline"
@@ -180,6 +193,8 @@ def test_main_output_json_contains_required_fields(monkeypatch, tmp_path, capsys
     assert parsed["no_send"] is True
     assert parsed["readonly"] is True
     assert parsed["counts"] == {"messages": 2, "threads": 3}
+    assert parsed["messages"] == 2
+    assert parsed["threads"] == 3
     assert parsed["mode"] == "both"
     assert parsed["reset"] is False
     assert parsed["reset_executed"] is False

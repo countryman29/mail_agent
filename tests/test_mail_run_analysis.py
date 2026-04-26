@@ -118,6 +118,7 @@ def test_main_output_json_emits_valid_aggregate_result(monkeypatch, capsys):
     calls = []
 
     def fake_tasks_main(argv=None):
+        print("NOISY_TASK_LOG")
         calls.append(("messages", argv))
         return {
             "status": "ok",
@@ -126,6 +127,7 @@ def test_main_output_json_emits_valid_aggregate_result(monkeypatch, capsys):
         }
 
     def fake_threads_main(argv=None):
+        print("NOISY_THREAD_LOG")
         calls.append(("threads", argv))
         return {
             "status": "ok",
@@ -138,7 +140,8 @@ def test_main_output_json_emits_valid_aggregate_result(monkeypatch, capsys):
 
     result = mail_run_analysis.main(argv=["--output-json", "--mode", "both"])
 
-    parsed = json.loads(capsys.readouterr().out.strip())
+    printed = capsys.readouterr().out.strip()
+    parsed = json.loads(printed)
     assert result == parsed
     assert parsed["status"] == "ok"
     assert parsed["command"] == "mail_run_analysis"

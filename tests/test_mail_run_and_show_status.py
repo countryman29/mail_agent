@@ -170,7 +170,9 @@ def test_main_output_json_emits_aggregate_result(monkeypatch, capsys):
 
     result = mail_run_and_show_status.main(argv=["--output-json"])
 
-    parsed = json.loads(capsys.readouterr().out.strip())
+    printed = capsys.readouterr().out.strip()
+    assert len(printed.splitlines()) == 1
+    parsed = json.loads(printed)
     assert result == parsed
     assert parsed["status"] == "ok"
     assert parsed["command"] == "mail_run_and_show_status"
@@ -178,14 +180,79 @@ def test_main_output_json_emits_aggregate_result(monkeypatch, capsys):
     assert parsed["no_send"] is True
     assert parsed["readonly"] is True
     assert parsed["counts"] == {"messages": 2, "threads": 3}
-    assert parsed["warnings"] == ["Dry run enabled: status file was not written"]
+    assert parsed["warnings"] == [
+        "Dry run enabled: status file was not written",
+        "Status read skipped in dry-run JSON mode to avoid stale status file data",
+    ]
     assert parsed["pipeline_result"] == pipeline_result
-    assert parsed["status_result"] == status
+    assert parsed["status_result"] == {
+        "status": "skipped",
+        "reason": "dry_run_status_not_written",
+        "stale": True,
+    }
     assert parsed["status_file"] == "/tmp/state/last_pipeline_run.json"
     assert calls == [
         ("pipeline", ["--limit", "50", "--readonly", "--dry-run", "--output-json"]),
-        ("status", ["--readonly", "--dry-run", "--output-json"]),
     ]
+
+
+def test_main_output_json_suppresses_noisy_child_stdout(monkeypatch, capsys):
+    calls = []
+    pipeline_result = {
+        "status": "ok",
+        "counts": {"messages": 1, "threads": 1},
+        "output_paths": [],
+        "warnings": ["Dry run enabled: status file was not written"],
+        "status_file": "/tmp/state/last_pipeline_run.json",
+    }
+
+    def noisy_pipeline(argv=None):
+        print("NOISY_PIPELINE_LOG")
+        calls.append(("pipeline", argv))
+        return pipeline_result
+
+    def noisy_status(argv=None):
+        print("NOISY_STATUS_LOG")
+        calls.append(("status", argv))
+        return {"mode": "both", "messages": 1, "threads": 1, "state_file": "/tmp/state/mail_state.json"}
+
+    monkeypatch.setattr(mail_run_and_show_status.mail_run_pipeline, "main", noisy_pipeline)
+    monkeypatch.setattr(mail_run_and_show_status.mail_show_pipeline_status, "main", noisy_status)
+
+    result = mail_run_and_show_status.main(argv=["--output-json", "--real-run"])
+
+    printed = capsys.readouterr().out.strip()
+    assert len(printed.splitlines()) == 1
+    parsed = json.loads(printed)
+    assert result == parsed
+    assert parsed["status"] == "ok"
+    assert parsed["pipeline_result"] == pipeline_result
+    assert parsed["status_result"]["mode"] == "both"
+    assert calls == [
+        ("pipeline", ["--limit", "50", "--readonly", "--real-run", "--output-json"]),
+        ("status", ["--readonly", "--real-run"]),
+    ]
+
+
+def test_main_output_json_counts_fallback_to_pipeline_direct_fields(monkeypatch, capsys):
+    pipeline_result = {
+        "status": "ok",
+        "messages": 9,
+        "threads": 4,
+        "output_paths": [],
+        "warnings": [],
+        "status_file": "/tmp/state/last_pipeline_run.json",
+    }
+    status = {"mode": "both", "messages": 100, "threads": 200, "state_file": "/tmp/state/mail_state.json"}
+
+    monkeypatch.setattr(mail_run_and_show_status.mail_run_pipeline, "main", lambda argv=None: pipeline_result)
+    monkeypatch.setattr(mail_run_and_show_status.mail_show_pipeline_status, "main", lambda argv=None: status)
+
+    result = mail_run_and_show_status.main(argv=["--output-json", "--real-run"])
+
+    parsed = json.loads(capsys.readouterr().out.strip())
+    assert result == parsed
+    assert parsed["counts"] == {"messages": 9, "threads": 4}
 
 
 def test_script_has_no_smtp_or_send_imports():

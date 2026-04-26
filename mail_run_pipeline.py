@@ -1,6 +1,8 @@
 import json
 import os
 from pathlib import Path
+import io
+from contextlib import redirect_stdout
 
 from mail_cli import add_common_args
 from mail_result import build_result, emit_result
@@ -63,6 +65,13 @@ def _extract_counts(result: dict[str, object]) -> tuple[int, int]:
     return int(result.get("messages", 0)), int(result.get("threads", 0))
 
 
+def _run_analysis_child(argv: list[str], suppress_stdout: bool):
+    if not suppress_stdout:
+        return mail_run_analysis.main(argv=argv)
+    with io.StringIO() as buffer, redirect_stdout(buffer):
+        return mail_run_analysis.main(argv=argv)
+
+
 def main(argv: list[str] | None = None, mode: str | None = None, reset: bool | None = None):
     # Legacy compatibility: main("messages")
     if isinstance(argv, str) and mode is None:
@@ -92,7 +101,10 @@ def main(argv: list[str] | None = None, mode: str | None = None, reset: bool | N
         reset_executed = True
 
     analysis_child_argv = _build_analysis_child_argv(args, selected_mode)
-    analysis_result = mail_run_analysis.main(argv=analysis_child_argv)
+    analysis_result = _run_analysis_child(
+        analysis_child_argv,
+        suppress_stdout=bool(args.output_json),
+    )
     messages_count, threads_count = _extract_counts(analysis_result)
 
     summary = {
@@ -132,6 +144,8 @@ def main(argv: list[str] | None = None, mode: str | None = None, reset: bool | N
     result["mode"] = selected_mode
     result["reset"] = should_reset_requested
     result["reset_executed"] = reset_executed
+    result["messages"] = messages_count
+    result["threads"] = threads_count
     result["state_file"] = str(mail_reset_analysis_state.STATE_PATH)
     result["status_file"] = str(status_path)
     emit_result(result, output_json=args.output_json)

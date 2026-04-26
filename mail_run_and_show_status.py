@@ -1,4 +1,6 @@
 import argparse
+import io
+from contextlib import redirect_stdout
 
 from mail_cli import add_common_args
 from mail_result import build_result, emit_result
@@ -44,25 +46,70 @@ def _build_status_argv(args) -> list[str]:
         argv.extend(["--status-path", args.status_path])
     argv.append("--readonly" if args.readonly else "--readwrite")
     argv.append("--dry-run" if args.dry_run else "--real-run")
-    if args.output_json:
-        argv.append("--output-json")
     return argv
+
+
+def _run_child(main_fn, argv: list[str], suppress_stdout: bool):
+    if not suppress_stdout:
+        return main_fn(argv=argv)
+    with io.StringIO() as buffer, redirect_stdout(buffer):
+        return main_fn(argv=argv)
+
+
+def _extract_counts(pipeline_result: dict[str, object] | object, status_result: dict[str, object] | object) -> dict[str, int]:
+    if isinstance(pipeline_result, dict):
+        counts = pipeline_result.get("counts")
+        if isinstance(counts, dict):
+            if "messages" in counts or "threads" in counts:
+                return {
+                    "messages": int(counts.get("messages", 0)),
+                    "threads": int(counts.get("threads", 0)),
+                }
+            return {
+                "messages": int(counts.get("messages_analyzed", 0)),
+                "threads": int(counts.get("threads_analyzed", 0)),
+            }
+        if "messages" in pipeline_result or "threads" in pipeline_result:
+            return {
+                "messages": int(pipeline_result.get("messages", 0)),
+                "threads": int(pipeline_result.get("threads", 0)),
+            }
+
+    if isinstance(status_result, dict):
+        return {
+            "messages": int(status_result.get("messages", 0)),
+            "threads": int(status_result.get("threads", 0)),
+        }
+    return {"messages": 0, "threads": 0}
 
 
 def main(argv: list[str] | None = None):
     parser = build_parser()
     args = parser.parse_args(argv if argv is not None else [])
 
-    pipeline_result = mail_run_pipeline.main(argv=_build_pipeline_argv(args))
-    status_result = mail_show_pipeline_status.main(argv=_build_status_argv(args))
+    suppress_child_stdout = bool(args.output_json)
+    pipeline_result = _run_child(
+        mail_run_pipeline.main,
+        _build_pipeline_argv(args),
+        suppress_stdout=suppress_child_stdout,
+    )
 
-    pipeline_counts = pipeline_result.get("counts", {}) if isinstance(pipeline_result, dict) else {}
-    status_messages = int(status_result.get("messages", 0)) if isinstance(status_result, dict) else 0
-    status_threads = int(status_result.get("threads", 0)) if isinstance(status_result, dict) else 0
-    counts = {
-        "messages": int(pipeline_counts.get("messages", status_messages)),
-        "threads": int(pipeline_counts.get("threads", status_threads)),
-    }
+    status_result: dict[str, object]
+    skip_status_in_dry_run_json = bool(args.output_json and args.dry_run)
+    if skip_status_in_dry_run_json:
+        status_result = {
+            "status": "skipped",
+            "reason": "dry_run_status_not_written",
+            "stale": True,
+        }
+    else:
+        status_result = _run_child(
+            mail_show_pipeline_status.main,
+            _build_status_argv(args),
+            suppress_stdout=suppress_child_stdout,
+        )
+
+    counts = _extract_counts(pipeline_result, status_result)
 
     output_paths: list[str] = []
     warnings: list[str] = []
@@ -70,6 +117,8 @@ def main(argv: list[str] | None = None):
     if isinstance(pipeline_result, dict):
         output_paths.extend([str(path) for path in pipeline_result.get("output_paths", [])])
         warnings.extend([str(w) for w in pipeline_result.get("warnings", [])])
+    if skip_status_in_dry_run_json:
+        warnings.append("Status read skipped in dry-run JSON mode to avoid stale status file data")
     status_path_value = None
     if isinstance(status_result, dict):
         status_path_value = status_result.get("state_file")
