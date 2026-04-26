@@ -14,8 +14,9 @@ class FakeIMAP:
     def login(self, username, password):
         self.logged_in = True
 
-    def select(self, folder):
+    def select(self, folder, readonly=None):
         self.selected_folder = folder
+        self.selected_readonly = readonly
         return "OK", [str(len(self.messages)).encode()]
 
     def search(self, charset, criteria):
@@ -48,6 +49,20 @@ def configure_analysis_module(monkeypatch, module, tmp_path, fake_imap):
     monkeypatch.setattr(module, "STATE_PATH", tmp_path / "state" / "mail_state.json")
     monkeypatch.setattr(module, "ANALYSIS_DIR", tmp_path / "analysis")
     monkeypatch.setattr(module, "TASKS_DIR", tmp_path / "tasks")
+    if hasattr(module, "load_safe_config"):
+        monkeypatch.setattr(
+            module,
+            "load_safe_config",
+            lambda command_type=None: (
+                {
+                    "IMAP_HOST": "imap.example.com",
+                    "IMAP_PORT": "993",
+                    "EMAIL_USERNAME": "user@example.com",
+                    "EMAIL_PASSWORD": "secret",
+                },
+                {"automation_mode": False},
+            ),
+        )
     monkeypatch.setattr(module.imaplib, "IMAP4_SSL", lambda host, port: fake_imap)
 
 
@@ -64,7 +79,7 @@ def test_mail_analyze_tasks_main_creates_outputs_and_updates_state(monkeypatch, 
     )
     configure_analysis_module(monkeypatch, mail_analyze_tasks, tmp_path, fake_imap)
 
-    result = mail_analyze_tasks.main()
+    result = mail_analyze_tasks.main(argv=["--real-run"])
 
     analysis_files = list((tmp_path / "analysis").rglob("*.md"))
     task_files = list((tmp_path / "tasks").rglob("*.md"))
