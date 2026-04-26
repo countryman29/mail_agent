@@ -5,13 +5,16 @@ import imaplib
 import email
 from email.header import decode_header
 from dotenv import dotenv_values
+from mail_cli import add_common_args
+from mail_result import build_result, emit_result
+from mail_safe_config import load_safe_config
 from mail_analysis_helpers import (
-    fetch_recent_rfc822_messages,
     get_text_from_message,
     load_json_state,
     parse_message_date_metadata,
     write_dated_analysis_outputs,
 )
+from mail_folder_aliases import select_folder_with_aliases
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -28,6 +31,7 @@ EMAIL_PASSWORD = ENV.get("EMAIL_PASSWORD")
 
 TARGET_FOLDER = "INBOX/Elcon"
 LIMIT = 100
+COMMAND_NAME = "mail_analyze_threads"
 
 
 def decode_mime(value):
@@ -72,6 +76,52 @@ def save_state(state):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def build_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Analyze mailbox threads into markdown outputs")
+    add_common_args(parser)
+    return parser
+
+
+def fetch_recent_rfc822_messages_with_readonly(mail, target_folder: str, limit: int, readonly=True):
+    print(f"\n=== SELECT FOLDER: {target_folder} ===")
+    status, data, selected_folder = select_folder_with_aliases(mail, target_folder, readonly=readonly)
+    print("SELECT:", status, data)
+    if status != "OK":
+        raise RuntimeError(f"Cannot open folder {target_folder}")
+    if selected_folder != target_folder:
+        print("SELECTED FOLDER ALIAS:", selected_folder)
+
+    status, data = mail.search(None, "ALL")
+    print("SEARCH:", status)
+    if status != "OK":
+        raise RuntimeError("Search failed")
+
+    ids = data[0].split()[-limit:]
+    messages = []
+
+    for num in ids:
+        status, msg_data = mail.fetch(num, "(RFC822)")
+        if status != "OK":
+            continue
+        messages.append((num, msg_data[0][1]))
+
+    return messages
+
+
+def build_dated_output_paths(
+    analysis_dir: Path,
+    tasks_dir: Path,
+    company_name: str,
+    date_folder: str,
+    filename: str,
+) -> tuple[Path, Path]:
+    analysis_file = analysis_dir / company_name / date_folder / filename
+    task_file = tasks_dir / company_name / date_folder / filename
+    return analysis_file, task_file
 
 
 def detect_open_questions(full_text: str):
@@ -230,25 +280,44 @@ def render_thread_analysis_outputs(
     return analysis_content, task_content
 
 
-def main():
-    print("DEBUG ENV PATH =", ENV_PATH)
-    print("DEBUG IMAP_HOST =", repr(IMAP_HOST))
-    print("DEBUG EMAIL_USERNAME =", repr(EMAIL_USERNAME))
+def analyze_threads(
+    *,
+    target_folder: str,
+    limit: int,
+    output_dir: str | None,
+    no_state_write: bool,
+    readonly: bool,
+    dry_run: bool,
+    no_send: bool,
+):
+    config, _ = load_safe_config(command_type="imap_read")
+    imap_host = config.get("IMAP_HOST", IMAP_HOST)
+    email_username = config.get("EMAIL_USERNAME", EMAIL_USERNAME)
+    email_password = config.get("EMAIL_PASSWORD", EMAIL_PASSWORD)
+    imap_port = int(config.get("IMAP_PORT", IMAP_PORT))
 
-    if not IMAP_HOST or not EMAIL_USERNAME or not EMAIL_PASSWORD:
+    print("DEBUG ENV PATH =", ENV_PATH)
+    print("DEBUG IMAP_HOST =", repr(imap_host))
+    print("DEBUG EMAIL_USERNAME =", repr(email_username))
+
+    if not imap_host or not email_username or not email_password:
         raise ValueError("Проверь .env: IMAP_HOST / EMAIL_USERNAME / EMAIL_PASSWORD")
 
     state = load_state()
     processed_thread_keys = set(state.get("processed_thread_keys", []))
 
-    company_name = company_from_folder(TARGET_FOLDER)
+    company_name = company_from_folder(target_folder)
+    analysis_base_dir = ANALYSIS_DIR if output_dir in (None, "") else Path(output_dir).expanduser().resolve() / "analysis"
+    tasks_base_dir = TASKS_DIR if output_dir in (None, "") else Path(output_dir).expanduser().resolve() / "tasks"
 
-    mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    mail.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+    mail = imaplib.IMAP4_SSL(imap_host, imap_port)
+    mail.login(email_username, email_password)
 
     threads = {}
 
-    for num, raw_email in fetch_recent_rfc822_messages(mail, TARGET_FOLDER, LIMIT):
+    for num, raw_email in fetch_recent_rfc822_messages_with_readonly(
+        mail, target_folder, limit, readonly=readonly
+    ):
         msg = email.message_from_bytes(raw_email)
 
         subject = decode_mime(msg.get("Subject"))
@@ -278,6 +347,7 @@ def main():
 
     created = 0
     new_thread_keys = set()
+    output_paths: list[str] = []
 
     for thread_key, payload in threads.items():
         if thread_key in processed_thread_keys:
@@ -303,7 +373,7 @@ def main():
 
         analysis_content, task_content = render_thread_analysis_outputs(
             company_name=company_name,
-            target_folder=TARGET_FOLDER,
+            target_folder=target_folder,
             subject=subject,
             thread_key=thread_key,
             items=items,
@@ -313,32 +383,85 @@ def main():
             urgency=urgency,
         )
 
-        analysis_file, task_file = write_dated_analysis_outputs(
-            analysis_dir=ANALYSIS_DIR,
-            tasks_dir=TASKS_DIR,
+        filename = f"{thread_key}_thread.md"
+        analysis_file, task_file = build_dated_output_paths(
+            analysis_dir=analysis_base_dir,
+            tasks_dir=tasks_base_dir,
             company_name=company_name,
             date_folder=latest_date_folder,
-            filename=f"{thread_key}_thread.md",
-            analysis_content=analysis_content,
-            task_content=task_content,
+            filename=filename,
         )
+        if not dry_run:
+            analysis_file, task_file = write_dated_analysis_outputs(
+                analysis_dir=analysis_base_dir,
+                tasks_dir=tasks_base_dir,
+                company_name=company_name,
+                date_folder=latest_date_folder,
+                filename=filename,
+                analysis_content=analysis_content,
+                task_content=task_content,
+            )
 
         print("THREAD ANALYZED:", analysis_file)
         print("THREAD TASK:", task_file)
+        output_paths.extend([str(analysis_file), str(task_file)])
 
         new_thread_keys.add(thread_key)
         created += 1
 
     mail.logout()
 
-    state["processed_thread_keys"] = sorted(set(state.get("processed_thread_keys", [])) | new_thread_keys)
-    save_state(state)
+    warnings: list[str] = []
+    if dry_run:
+        warnings.append("Dry run enabled: analysis/task files were not written")
+    if new_thread_keys:
+        if dry_run:
+            warnings.append("Dry run enabled: state file was not updated")
+        elif no_state_write:
+            warnings.append("State update skipped because --no-state-write is enabled")
+        else:
+            state["processed_thread_keys"] = sorted(set(state.get("processed_thread_keys", [])) | new_thread_keys)
+            save_state(state)
 
     print("\nDone.")
     print("Threads analyzed:", created)
     print("State file:", STATE_PATH)
-    return created
+    return build_result(
+        status="ok",
+        command=COMMAND_NAME,
+        dry_run=dry_run,
+        no_send=no_send,
+        readonly=readonly,
+        counts={"threads_analyzed": created},
+        output_paths=output_paths,
+        warnings=warnings,
+        risk_flags=["imap_access", "local_output_write", "human_review_required"],
+        human_review_required=True,
+        errors=[],
+    )
+
+
+def main(argv: list[str] | None = None):
+    parser = build_parser()
+    args = parser.parse_args(argv if argv is not None else [])
+
+    selected_folder = args.folder or TARGET_FOLDER
+    result = analyze_threads(
+        target_folder=selected_folder,
+        limit=args.limit,
+        output_dir=args.output_dir,
+        no_state_write=args.no_state_write,
+        readonly=args.readonly,
+        dry_run=args.dry_run,
+        no_send=args.no_send,
+    )
+    emit_result(result, output_json=args.output_json)
+    if args.output_json:
+        return result
+    return int(result["counts"]["threads_analyzed"])
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main(sys.argv[1:])

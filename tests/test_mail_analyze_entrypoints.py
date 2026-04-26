@@ -114,7 +114,7 @@ def test_mail_analyze_threads_main_creates_outputs_and_updates_state(monkeypatch
     )
     configure_analysis_module(monkeypatch, mail_analyze_threads, tmp_path, fake_imap)
 
-    result = mail_analyze_threads.main()
+    result = mail_analyze_threads.main(argv=["--real-run"])
 
     analysis_files = list((tmp_path / "analysis").rglob("*.md"))
     task_files = list((tmp_path / "tasks").rglob("*.md"))
